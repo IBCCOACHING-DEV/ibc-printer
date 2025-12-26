@@ -140,7 +140,7 @@ export class LinuxPrinterService implements IPrinterService {
     copies: number = 1,
   ): Promise<PrintResult> {
     try {
-      const command = `printf "%s" "${this.escapeText(text)}" | lp -d "${printerName}" -n ${copies}`;
+      const command = `printf "%s" "${this.escapeText(text)}" | lp -d "${printerName}" -n ${copies} -o orientation-requested=4`;
       const { stdout } = await execAsync(command);
 
       const jobId = this.extractJobId(stdout);
