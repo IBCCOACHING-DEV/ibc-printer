@@ -112,9 +112,10 @@ describe('PrintService', () => {
 
   describe('printText', () => {
     const printTextDto: PrintTextDto = {
-      text: 'Test print content',
       printerName: 'Printer1',
       copies: 1,
+      nome: '',
+      nickname: '',
     };
 
     it('should print text successfully', async () => {

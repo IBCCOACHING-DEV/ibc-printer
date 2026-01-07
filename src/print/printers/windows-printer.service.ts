@@ -86,7 +86,8 @@ export class WindowsPrinterService implements IPrinterService {
   }
 
   async printText(
-    text: string,
+    name: string,
+    nickname: string,
     printerName: string,
     copies: number = 1,
   ): Promise<PrintResult> {
@@ -95,7 +96,7 @@ export class WindowsPrinterService implements IPrinterService {
     return new Promise((resolve, reject) => {
       try {
         const printJob = {
-          data: text,
+          data: name,
           printer: printerName,
           type: 'TEXT',
           success: (jobID: string) => {
