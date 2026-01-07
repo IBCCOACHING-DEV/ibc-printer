@@ -8,6 +8,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as temp from 'temp';
 import * as fs from 'fs-extra';
+import nodeHtmlToImage from 'node-html-to-image';
+import * as path from 'path'; // IMPORTAÇÃO CORRETA
 
 const execAsync = promisify(exec);
 
@@ -135,19 +137,72 @@ export class LinuxPrinterService implements IPrinterService {
   }
 
   async printText(
-    text: string,
+    name: string,
+    nickname: string,
     printerName: string,
     copies: number = 1,
   ): Promise<PrintResult> {
+    const tempFileName = `print_${Date.now()}.png`;
+    const tempImagePath = path.join(process.cwd(), tempFileName);
+
     try {
-      const command = `printf "%s" "${this.escapeText(text)}" | lp -d "${printerName}" -n ${copies} -o orientation-requested=4`;
+      // 2. Gerar a Imagem com HTML e CSS
+      await nodeHtmlToImage({
+        output: tempImagePath,
+        html: `
+        <html>
+          <head>
+            <style>
+              body { 
+                width: 3000px;     
+                background-color: white;
+                padding: 0px;
+                magin: 0px;
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                justify-content: flex-start;
+              }
+              .container { 
+                text-align: left; 
+                margin-left: 0px; 
+              }
+              .name { 
+                font-size: 150px; 
+                color: black;
+                margin-bottom: 10px;
+                font-family: Arial, sans-serif;
+              }
+              .nickname { 
+                font-size: 200px; 
+                font-weight: bold; 
+                color: #333; 
+                font-family: Arial, sans-serif;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+            <div class="nickname">${nickname}</div>
+              <div class="name">${name}</div>
+            </div>
+          </body>
+        </html>
+      `,
+        puppeteerArgs: { args: ['--no-sandbox, --disable-setuid-sandbox'] }, // Necessário para Linux/Docker
+      });
+
+      // 3. Comando lp enviando o ARQUIVO DE IMAGEM
+      // Importante: não usamos printf aqui, passamos o caminho do arquivo direto
+      const command = `lp -d "${printerName}" -n ${copies} -o orientation-requested=4 -o position=top-left "${tempImagePath}"`;
       const { stdout } = await execAsync(command);
 
       const jobId = this.extractJobId(stdout);
 
-      this.logger.log(
-        `Texto enviado para impressão Linux - Job: ${jobId}, Impressora: ${printerName}`,
-      );
+      // 4. Limpar arquivo temporário
+      if (fs.existsSync(tempImagePath)) {
+        fs.unlinkSync(tempImagePath);
+      }
 
       return {
         success: true,
@@ -156,7 +211,8 @@ export class LinuxPrinterService implements IPrinterService {
         timestamp: new Date(),
       };
     } catch (error) {
-      throw new Error(`Falha ao imprimir texto: ${error.message}`);
+      if (fs.existsSync(tempImagePath)) fs.unlinkSync(tempImagePath);
+      throw new Error(`Falha ao imprimir: ${error.message}`);
     }
   }
 
