@@ -11,7 +11,7 @@ export class PrintTextDto {
   copies?: number = 1;
 
   @IsString()
-  nome: string;
+  name: string;
 
   @IsString()
   nickname: string;

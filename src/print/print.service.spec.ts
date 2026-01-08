@@ -114,7 +114,7 @@ describe('PrintService', () => {
     const printTextDto: PrintTextDto = {
       printerName: 'Printer1',
       copies: 1,
-      nome: '',
+      name: '',
       nickname: '',
     };
 

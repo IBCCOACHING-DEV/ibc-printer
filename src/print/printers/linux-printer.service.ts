@@ -9,7 +9,7 @@ import { promisify } from 'util';
 import * as temp from 'temp';
 import * as fs from 'fs-extra';
 import nodeHtmlToImage from 'node-html-to-image';
-import * as path from 'path'; // IMPORTAÇÃO CORRETA
+import * as path from 'path';
 
 const execAsync = promisify(exec);
 
@@ -18,90 +18,33 @@ export class LinuxPrinterService implements IPrinterService {
   private readonly logger = new Logger(LinuxPrinterService.name);
 
   async getPrinters(): Promise<PrinterInfo[]> {
-    try {
-      const { stdout } = await execAsync(
-        'lpstat -p 2>/dev/null || echo "No printers"',
-      );
+    const { stdout } = await execAsync('LC_ALL=C lpstat -p');
 
-      if (stdout.includes('No printers') || stdout.trim() === '') {
-        return await this.getPrintersFromCups();
-      }
+    console.log('lpstat output:', stdout);
 
-      const printers: PrinterInfo[] = [];
-      const lines = stdout.split('\n').filter((line) => line.trim());
+    const printers: PrinterInfo[] = [];
 
-      for (const line of lines) {
-        if (line.startsWith('printer')) {
-          const parts = line.split(' ');
-          const name = parts[1];
-          const status = line.includes('enabled') ? 'ready' : 'disabled';
+    stdout
+      .split('\n')
+      .filter((line) => line.startsWith('printer '))
+      .forEach((line) => {
+        const name = line.split(' ')[1];
 
-          printers.push({
-            name,
-            isDefault: await this.isDefaultPrinter(name),
-            status,
-            isOnline: status === 'ready',
-            description: line,
-          });
-        }
-      }
-
-      if (printers.length === 0) {
-        return await this.getPrintersFromCups();
-      }
-
-      return printers;
-    } catch (error) {
-      this.logger.warn(
-        'Erro ao listar impressoras Linux, tentando método alternativo:',
-        error,
-      );
-      return await this.getPrintersFromCups();
-    }
-  }
-
-  private async getPrintersFromCups(): Promise<PrinterInfo[]> {
-    try {
-      const { stdout } = await execAsync(
-        'lpinfo -v 2>/dev/null || echo "No printers"',
-      );
-
-      const printers: PrinterInfo[] = [];
-      const lines = stdout.split('\n').filter((line) => line.includes('://'));
-
-      lines.forEach((line) => {
-        const parts = line.split(' ');
-        if (parts.length >= 2) {
-          const device = parts[1];
-          const name = device.split('/').pop() || device;
-
-          printers.push({
-            name,
-            isDefault: printers.length === 0,
-            status: 'unknown',
-            isOnline: true,
-            description: device,
-          });
-        }
+        printers.push({
+          name,
+          isDefault: false,
+          status: line.includes('enabled') ? 'ready' : 'disabled',
+          isOnline: !line.includes('disabled'),
+          description: line,
+        });
       });
 
-      if (printers.length === 0) {
-        printers.push({
-          name: 'PDF',
-          isDefault: true,
-          status: 'ready',
-          isOnline: true,
-          description: 'Virtual PDF Printer',
-        });
-      }
+    const defaultPrinter = await this.getDefaultPrinter();
+    printers.forEach((p) => {
+      p.isDefault = p.name === defaultPrinter;
+    });
 
-      return printers;
-    } catch (error) {
-      this.logger.error('Falha ao obter impressoras do CUPS:', error);
-      throw new Error(
-        'Sistema de impressão não disponível no Linux. Instale CUPS: sudo apt install cups',
-      );
-    }
+    return printers;
   }
 
   async printPDF(
@@ -146,7 +89,6 @@ export class LinuxPrinterService implements IPrinterService {
     const tempImagePath = path.join(process.cwd(), tempFileName);
 
     try {
-      // 2. Gerar a Imagem com HTML e CSS
       await nodeHtmlToImage({
         output: tempImagePath,
         html: `
@@ -189,17 +131,14 @@ export class LinuxPrinterService implements IPrinterService {
           </body>
         </html>
       `,
-        puppeteerArgs: { args: ['--no-sandbox, --disable-setuid-sandbox'] }, // Necessário para Linux/Docker
+        puppeteerArgs: { args: ['--no-sandbox, --disable-setuid-sandbox'] },
       });
 
-      // 3. Comando lp enviando o ARQUIVO DE IMAGEM
-      // Importante: não usamos printf aqui, passamos o caminho do arquivo direto
       const command = `lp -d "${printerName}" -n ${copies} -o orientation-requested=4 -o position=top-left "${tempImagePath}"`;
       const { stdout } = await execAsync(command);
 
       const jobId = this.extractJobId(stdout);
 
-      // 4. Limpar arquivo temporário
       if (fs.existsSync(tempImagePath)) {
         fs.unlinkSync(tempImagePath);
       }
@@ -237,25 +176,8 @@ export class LinuxPrinterService implements IPrinterService {
     }
   }
 
-  private async isDefaultPrinter(printerName: string): Promise<boolean> {
-    try {
-      const defaultPrinter = await this.getDefaultPrinter();
-      return defaultPrinter === printerName;
-    } catch {
-      return false;
-    }
-  }
-
   private extractJobId(output: string): string {
     const match = output.match(/request id is ([^\s]+)/i);
     return match ? match[1] : `linux-${Date.now()}`;
-  }
-
-  private escapeText(text: string): string {
-    return text
-      .replace(/"/g, '\\"')
-      .replace(/\$/g, '\\$')
-      .replace(/`/g, '\\`')
-      .replace(/\n/g, '\\n');
   }
 }

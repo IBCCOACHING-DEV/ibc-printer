@@ -75,7 +75,7 @@ export class PrintService {
 
     try {
       const result = await this.printerService.printText(
-        printDto.nome,
+        printDto.name,
         printDto.nickname,
         printerName,
         printDto.copies,
