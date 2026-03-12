@@ -4,42 +4,34 @@ import {
   PrinterInfo,
   PrintResult,
 } from './base-printer.interface';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as temp from 'temp';
 import * as fs from 'fs-extra';
+import nodeHtmlToImage from 'node-html-to-image';
+import * as path from 'path';
+
+const execAsync = promisify(exec);
 
 @Injectable()
 export class WindowsPrinterService implements IPrinterService {
   private readonly logger = new Logger(WindowsPrinterService.name);
-  private printer: any;
-
-  constructor() {
-    this.loadPrinterLibrary();
-  }
-
-  private async loadPrinterLibrary() {
-    try {
-      this.printer = await import('node-printer');
-    } catch (error) {
-      throw new Error('node-printer não disponível no Windows');
-    }
-  }
 
   async getPrinters(): Promise<PrinterInfo[]> {
-    await this.loadPrinterLibrary();
+    const { stdout } = await execAsync(
+      'powershell -Command "Get-Printer | Select-Object Name, Default, PrinterStatus | ConvertTo-Json -Compress"',
+    );
 
-    try {
-      const printers = this.printer.getPrinters();
-      return printers.map((p: any) => ({
-        name: p.name,
-        isDefault: p.isDefault,
-        status: p.status || 'unknown',
-        isOnline: this.isPrinterOnline(p.status),
-        description: p.description,
-      }));
-    } catch (error) {
-      this.logger.error('Erro ao listar impressoras Windows:', error);
-      throw error;
-    }
+    const raw: any[] = JSON.parse(stdout.trim());
+    const list = Array.isArray(raw) ? raw : [raw];
+
+    return list.map((p) => ({
+      name: p.Name,
+      isDefault: p.Default === true,
+      status: String(p.PrinterStatus ?? 'unknown'),
+      isOnline: this.isPrinterOnline(String(p.PrinterStatus ?? '')),
+      description: p.Name,
+    }));
   }
 
   async printPDF(
@@ -47,42 +39,35 @@ export class WindowsPrinterService implements IPrinterService {
     printerName: string,
     copies: number = 1,
   ): Promise<PrintResult> {
-    await this.loadPrinterLibrary();
+    const tempFile = temp.openSync({ suffix: '.pdf' });
+    await fs.writeFile(tempFile.path, pdfBuffer);
 
-    return new Promise((resolve, reject) => {
-      try {
-        const tempFile = temp.openSync({ suffix: '.pdf' });
-        fs.writeFileSync(tempFile.path, pdfBuffer);
-
-        const printJob = {
-          document: tempFile.path,
-          printer: printerName,
-          type: 'PDF',
-          success: (jobID: string) => {
-            this.logger.log(
-              `PDF impresso no Windows - Job: ${jobID}, Impressora: ${printerName}`,
-            );
-
-            setTimeout(() => fs.unlinkSync(tempFile.path), 30000);
-
-            resolve({
-              success: true,
-              jobId: jobID,
-              printer: printerName,
-              timestamp: new Date(),
-            });
-          },
-          error: (err: Error) => {
-            fs.unlinkSync(tempFile.path);
-            reject(err);
-          },
-        };
-
-        this.printer.print(printJob);
-      } catch (error) {
-        reject(error);
+    try {
+      for (let i = 0; i < copies; i++) {
+        const command = `powershell -Command "Start-Process -FilePath '${tempFile.path}' -Verb PrintTo -ArgumentList '${printerName}' -Wait -WindowStyle Hidden"`;
+        await execAsync(command);
       }
-    });
+
+      const jobId = `win-${Date.now()}`;
+
+      this.logger.log(
+        `PDF enviado para impressão Windows - Job: ${jobId}, Impressora: ${printerName}`,
+      );
+
+      setTimeout(() => fs.unlinkSync(tempFile.path), 30000);
+
+      return {
+        success: true,
+        jobId,
+        printer: printerName,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      fs.unlinkSync(tempFile.path);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Falha ao imprimir PDF: ${errorMessage}`);
+    }
   }
 
   async printText(
@@ -91,53 +76,119 @@ export class WindowsPrinterService implements IPrinterService {
     printerName: string,
     copies: number = 1,
   ): Promise<PrintResult> {
-    await this.loadPrinterLibrary();
+    const tempFileName = `print_${Date.now()}.png`;
+    const tempImagePath = path.join(process.cwd(), tempFileName);
 
-    return new Promise((resolve, reject) => {
-      try {
-        const printJob = {
-          data: name,
-          printer: printerName,
-          type: 'TEXT',
-          success: (jobID: string) => {
-            this.logger.log(
-              `Texto impresso no Windows - Job: ${jobID}, Impressora: ${printerName}`,
-            );
-            resolve({
-              success: true,
-              jobId: jobID,
-              printer: printerName,
-              timestamp: new Date(),
-            });
-          },
-          error: (err: Error) => {
-            reject(err);
-          },
-        };
+    try {
+      await nodeHtmlToImage({
+        output: tempImagePath,
+        html: `
+        <html>
+          <head>
+            <style>
+              body { 
+                width: 3000px;     
+                background-color: white;
+                padding: 0px;
+                magin: 0px;
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                justify-content: flex-start;
+              }
+              .container { 
+                text-align: left; 
+                margin-left: 0px; 
+              }
+              .name { 
+                font-size: 150px; 
+                color: black;
+                margin-bottom: 10px;
+                font-family: Arial, sans-serif;
+              }
+              .nickname { 
+                font-size: 200px; 
+                font-weight: bold; 
+                color: #333; 
+                font-family: Arial, sans-serif;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="nickname">${nickname}</div>
+              <div class="name">${name}</div>
+            </div>
+          </body>
+        </html>
+      `,
+        puppeteerArgs: { args: ['--no-sandbox, --disable-setuid-sandbox'] },
+      });
 
-        this.printer.print(printJob);
-      } catch (error) {
-        reject(error);
+      for (let i = 0; i < copies; i++) {
+        const command = `powershell -Command "
+          Add-Type -AssemblyName System.Drawing;
+          $img = [System.Drawing.Image]::FromFile('${tempImagePath.replace(/\\/g, '\\\\')}');
+          $pd = New-Object System.Drawing.Printing.PrintDocument;
+          $pd.PrinterSettings.PrinterName = '${printerName}';
+          $pd.DefaultPageSettings.Landscape = $true;
+          $pd.add_PrintPage({
+            param($s, $e)
+            $e.Graphics.DrawImage($img, $e.MarginBounds)
+          });
+          $pd.Print();
+          $img.Dispose();
+          $pd.Dispose()
+        "`;
+        await execAsync(command);
       }
-    });
+
+      const jobId = `win-${Date.now()}`;
+
+      if (fs.existsSync(tempImagePath)) {
+        fs.unlinkSync(tempImagePath);
+      }
+
+      return {
+        success: true,
+        jobId,
+        printer: printerName,
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      if (fs.existsSync(tempImagePath)) fs.unlinkSync(tempImagePath);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Falha ao imprimir: ${errorMessage}`);
+    }
   }
 
   async getDefaultPrinter(): Promise<string> {
-    await this.loadPrinterLibrary();
+    try {
+      const { stdout } = await execAsync(
+        'powershell -Command "(Get-WmiObject -Query \\"SELECT * FROM Win32_Printer WHERE Default=True\\").Name"',
+      );
 
-    const defaultPrinter = this.printer.getDefaultPrinterName();
-    if (!defaultPrinter) {
-      throw new Error('Nenhuma impressora padrão configurada no Windows');
+      const name = stdout.trim();
+      if (!name) {
+        throw new Error('Nenhuma impressora padrão configurada no Windows');
+      }
+      return name;
+    } catch (error) {
+      this.logger.warn('Não foi possível obter impressora padrão:', error);
+      return 'PDF';
     }
-    return defaultPrinter;
   }
 
   private isPrinterOnline(status: string): boolean {
     if (!status) return false;
     return (
+      status === '3' ||
+      status === '4' ||
+      status === '5' ||
+      status.toLowerCase().includes('idle') ||
       status.toLowerCase().includes('ready') ||
-      status.toLowerCase().includes('online') ||
-      status.toLowerCase().includes('idle')
+      status.toLowerCase().includes('normal')
     );
   }
 }
