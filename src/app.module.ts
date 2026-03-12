@@ -4,6 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { PrintModule } from './print/print.module';
 import { QueueModule } from './queue/queue.module';
 import configuration from './config/configuration';
+import { PrinterHubModule } from './printer-hub/printer-hub.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import configuration from './config/configuration';
     AuthModule,
     PrintModule,
     QueueModule,
+    PrinterHubModule,
   ],
 })
 export class AppModule {}
