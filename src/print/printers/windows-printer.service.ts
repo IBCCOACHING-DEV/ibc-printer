@@ -147,12 +147,30 @@ export class WindowsPrinterService implements IPrinterService {
         const script =
           `$ErrorActionPreference='Stop'; ` +
           `Add-Type -AssemblyName System.Drawing; ` +
+          `Add-Type -AssemblyName System.Drawing.Common; ` +
           `$img = [System.Drawing.Image]::FromFile('${escapedImagePath}'); ` +
           `try { ` +
           `  $pd = New-Object System.Drawing.Printing.PrintDocument; ` +
           `  $pd.PrinterSettings.PrinterName = '${escapedPrinterName}'; ` +
-          `  $pd.DefaultPageSettings.Landscape = $true; ` +
-          `  $pd.add_PrintPage({ param($s, $e) $e.Graphics.DrawImage($img, $e.MarginBounds) }); ` +
+          `  $pd.DefaultPageSettings.Landscape = ($img.Width -gt $img.Height); ` +
+          `  $pd.OriginAtMargins = $false; ` +
+          `  $pd.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0,0,0,0); ` +
+          `  $pd.add_PrintPage({ ` +
+          `    param($s, $e) ` +
+          `    $bounds = $e.PageBounds; ` +
+          `    $imgW = [double]$img.Width; ` +
+          `    $imgH = [double]$img.Height; ` +
+          `    $scale = [Math]::Min($bounds.Width / $imgW, $bounds.Height / $imgH); ` +
+          `    $drawW = [int]($imgW * $scale); ` +
+          `    $drawH = [int]($imgH * $scale); ` +
+          `    $x = [int](($bounds.Width - $drawW) / 2); ` +
+          `    $y = [int](($bounds.Height - $drawH) / 2); ` +
+          `    $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic; ` +
+          `    $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality; ` +
+          `    $e.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality; ` +
+          `    $rect = New-Object System.Drawing.Rectangle($x, $y, $drawW, $drawH); ` +
+          `    $e.Graphics.DrawImage($img, $rect); ` +
+          `  }); ` +
           `  $pd.Print(); ` +
           `} finally { ` +
           `  if ($pd) { $pd.Dispose() }; ` +
