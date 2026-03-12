@@ -19,7 +19,7 @@ export class WindowsPrinterService implements IPrinterService {
 
   async getPrinters(): Promise<PrinterInfo[]> {
     const { stdout } = await execAsync(
-      'powershell -Command "Get-Printer | Select-Object Name, Default, PrinterStatus | ConvertTo-Json -Compress"',
+      'powershell -Command "Get-Printer | Select-Object Name, Default, PrinterStatus, PortName | ConvertTo-Json -Compress"',
     );
 
     const raw: any[] = JSON.parse(stdout.trim());
@@ -29,8 +29,11 @@ export class WindowsPrinterService implements IPrinterService {
       name: p.Name,
       isDefault: p.Default === true,
       status: String(p.PrinterStatus ?? 'unknown'),
-      isOnline: this.isPrinterOnline(String(p.PrinterStatus ?? '')),
-      description: p.Name,
+      isOnline: this.isPrinterOnline(
+        String(p.PrinterStatus ?? ''),
+        String(p.PortName ?? ''),
+      ),
+      description: `${p.Name} (${String(p.PortName ?? 'unknown-port')})`,
     }));
   }
 
@@ -187,15 +190,38 @@ export class WindowsPrinterService implements IPrinterService {
     }
   }
 
-  private isPrinterOnline(status: string): boolean {
-    if (!status) return false;
+  private isPrinterOnline(status: string, portName: string): boolean {
+    const normalizedStatus = String(status || '').toLowerCase();
+    const normalizedPort = String(portName || '').toLowerCase();
+
+    if (this.isLocalPort(normalizedPort)) {
+      return true;
+    }
+
+    if (!normalizedStatus) {
+      return true;
+    }
+
+    if (
+      normalizedStatus.includes('offline') ||
+      normalizedStatus.includes('error') ||
+      normalizedStatus.includes('not available') ||
+      normalizedStatus === '7' ||
+      normalizedStatus === '128'
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private isLocalPort(portName: string): boolean {
     return (
-      status === '3' ||
-      status === '4' ||
-      status === '5' ||
-      status.toLowerCase().includes('idle') ||
-      status.toLowerCase().includes('ready') ||
-      status.toLowerCase().includes('normal')
+      portName.startsWith('usb') ||
+      portName.startsWith('dot4') ||
+      portName.startsWith('lpt') ||
+      portName.startsWith('com') ||
+      portName.startsWith('wsd')
     );
   }
 }
