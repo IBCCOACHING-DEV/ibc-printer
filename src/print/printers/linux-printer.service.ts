@@ -20,8 +20,6 @@ export class LinuxPrinterService implements IPrinterService {
   async getPrinters(): Promise<PrinterInfo[]> {
     const { stdout } = await execAsync('LC_ALL=C lpstat -p');
 
-    console.log('lpstat output:', stdout);
-
     const printers: PrinterInfo[] = [];
 
     stdout
@@ -75,7 +73,9 @@ export class LinuxPrinterService implements IPrinterService {
       };
     } catch (error) {
       fs.unlinkSync(tempFile.path);
-      throw new Error(`Falha ao imprimir PDF: ${error.message}`);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Falha ao imprimir PDF: ${errorMessage}`);
     }
   }
 
@@ -151,7 +151,9 @@ export class LinuxPrinterService implements IPrinterService {
       };
     } catch (error) {
       if (fs.existsSync(tempImagePath)) fs.unlinkSync(tempImagePath);
-      throw new Error(`Falha ao imprimir: ${error.message}`);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Falha ao imprimir: ${errorMessage}`);
     }
   }
 
@@ -162,17 +164,19 @@ export class LinuxPrinterService implements IPrinterService {
       );
 
       if (stdout.includes('No default') || !stdout.includes(':')) {
-        const printers = await this.getPrinters();
-        const defaultPrinter = printers.find((p) => p.isDefault);
-        return defaultPrinter?.name || printers[0]?.name || 'PDF';
+        const { stdout: printersOutput } = await execAsync('LC_ALL=C lpstat -p');
+        const firstPrinterLine = printersOutput
+          .split('\n')
+          .find((line) => line.startsWith('printer '));
+
+        return firstPrinterLine?.split(' ')[1] || 'PDF';
       }
 
       const parts = stdout.split(':');
       return parts[1]?.trim() || 'PDF';
     } catch (error) {
       this.logger.warn('Não foi possível obter impressora padrão:', error);
-      const printers = await this.getPrinters();
-      return printers[0]?.name || 'PDF';
+      return 'PDF';
     }
   }
 
