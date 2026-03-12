@@ -110,19 +110,19 @@ export class WindowsPrinterService implements IPrinterService {
                 margin-left: 0px; 
               }
               .name { 
-                font-size: 150px; 
+                font-size: 170px; 
                 color: black;
                 margin-bottom: 10px;
                 font-family: Arial, sans-serif;
               }
               .nickname { 
-                font-size: 200px; 
+                font-size: 230px; 
                 font-weight: bold; 
                 color: #333; 
                 font-family: Arial, sans-serif;
               }
               .course {
-                font-size: 100px;
+                font-size: 120px;
                 color: #666;
                 font-family: Arial, sans-serif;
               }
