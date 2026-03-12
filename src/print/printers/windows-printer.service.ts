@@ -46,9 +46,14 @@ export class WindowsPrinterService implements IPrinterService {
     await fs.writeFile(tempFile.path, pdfBuffer);
 
     try {
+      const escapedFilePath = this.escapePowerShellSingleQuoted(tempFile.path);
+      const escapedPrinterName = this.escapePowerShellSingleQuoted(printerName);
+
       for (let i = 0; i < copies; i++) {
-        const command = `powershell -Command "Start-Process -FilePath '${tempFile.path}' -Verb PrintTo -ArgumentList '${printerName}' -Wait -WindowStyle Hidden"`;
-        await execAsync(command);
+        const script =
+          `$ErrorActionPreference='Stop'; ` +
+          `Start-Process -FilePath '${escapedFilePath}' -Verb PrintTo -ArgumentList '${escapedPrinterName}' -Wait -WindowStyle Hidden;`;
+        await this.execPowerShell(script);
       }
 
       const jobId = `win-${Date.now()}`;
@@ -135,22 +140,25 @@ export class WindowsPrinterService implements IPrinterService {
         puppeteerArgs: { args: ['--no-sandbox, --disable-setuid-sandbox'] },
       });
 
+      const escapedImagePath = this.escapePowerShellSingleQuoted(tempImagePath);
+      const escapedPrinterName = this.escapePowerShellSingleQuoted(printerName);
+
       for (let i = 0; i < copies; i++) {
-        const command = `powershell -Command "
-          Add-Type -AssemblyName System.Drawing;
-          $img = [System.Drawing.Image]::FromFile('${tempImagePath.replace(/\\/g, '\\\\')}');
-          $pd = New-Object System.Drawing.Printing.PrintDocument;
-          $pd.PrinterSettings.PrinterName = '${printerName}';
-          $pd.DefaultPageSettings.Landscape = $true;
-          $pd.add_PrintPage({
-            param($s, $e)
-            $e.Graphics.DrawImage($img, $e.MarginBounds)
-          });
-          $pd.Print();
-          $img.Dispose();
-          $pd.Dispose()
-        "`;
-        await execAsync(command);
+        const script =
+          `$ErrorActionPreference='Stop'; ` +
+          `Add-Type -AssemblyName System.Drawing; ` +
+          `$img = [System.Drawing.Image]::FromFile('${escapedImagePath}'); ` +
+          `try { ` +
+          `  $pd = New-Object System.Drawing.Printing.PrintDocument; ` +
+          `  $pd.PrinterSettings.PrinterName = '${escapedPrinterName}'; ` +
+          `  $pd.DefaultPageSettings.Landscape = $true; ` +
+          `  $pd.add_PrintPage({ param($s, $e) $e.Graphics.DrawImage($img, $e.MarginBounds) }); ` +
+          `  $pd.Print(); ` +
+          `} finally { ` +
+          `  if ($pd) { $pd.Dispose() }; ` +
+          `  $img.Dispose() ` +
+          `}`;
+        await this.execPowerShell(script);
       }
 
       const jobId = `win-${Date.now()}`;
@@ -223,5 +231,15 @@ export class WindowsPrinterService implements IPrinterService {
       portName.startsWith('com') ||
       portName.startsWith('wsd')
     );
+  }
+
+  private async execPowerShell(script: string): Promise<void> {
+    const escapedScript = script.replace(/"/g, '\\"');
+    const command = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${escapedScript}"`;
+    await execAsync(command);
+  }
+
+  private escapePowerShellSingleQuoted(value: string): string {
+    return String(value || '').replace(/'/g, "''");
   }
 }
