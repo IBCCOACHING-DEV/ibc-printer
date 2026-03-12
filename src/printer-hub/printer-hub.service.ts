@@ -234,6 +234,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
           nickname: payload.nickname,
           copies: payload.copies || 1,
           printerName,
+          course: payload.course,
         });
         success = !!result.success;
         nativeJobId = result.jobId;

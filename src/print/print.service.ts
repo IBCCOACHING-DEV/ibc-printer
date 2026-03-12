@@ -79,6 +79,7 @@ export class PrintService {
         printDto.nickname,
         printerName,
         printDto.copies,
+        printDto.course,
       );
 
       this.logger.log(`✅ Texto impresso com sucesso - Job: ${result.jobId}`);

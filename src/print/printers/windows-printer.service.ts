@@ -75,6 +75,7 @@ export class WindowsPrinterService implements IPrinterService {
     nickname: string,
     printerName: string,
     copies: number = 1,
+    course?: string,
   ): Promise<PrintResult> {
     const tempFileName = `print_${Date.now()}.png`;
     const tempImagePath = path.join(process.cwd(), tempFileName);
@@ -112,12 +113,18 @@ export class WindowsPrinterService implements IPrinterService {
                 color: #333; 
                 font-family: Arial, sans-serif;
               }
+              .course {
+                font-size: 100px;
+                color: #666;
+                font-family: Arial, sans-serif;
+              }
             </style>
           </head>
           <body>
             <div class="container">
               <div class="nickname">${nickname}</div>
               <div class="name">${name}</div>
+              ${course ? `<div class="course">${course}</div>` : ''}
             </div>
           </body>
         </html>

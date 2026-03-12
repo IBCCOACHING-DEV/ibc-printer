@@ -28,6 +28,7 @@ export interface IPrinterService {
     nickname: string,
     printerName: string,
     copies?: number,
+    course?: string,
   ): Promise<PrintResult>;
   getDefaultPrinter(): Promise<string>;
 }

@@ -15,4 +15,8 @@ export class PrintTextDto {
 
   @IsString()
   nickname: string;
+
+  @IsString()
+  @IsOptional()
+  course?: string;
 }
