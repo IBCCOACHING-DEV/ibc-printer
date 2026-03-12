@@ -147,7 +147,6 @@ export class WindowsPrinterService implements IPrinterService {
         const script =
           `$ErrorActionPreference='Stop'; ` +
           `Add-Type -AssemblyName System.Drawing; ` +
-          `Add-Type -AssemblyName System.Drawing.Common; ` +
           `$img = [System.Drawing.Image]::FromFile('${escapedImagePath}'); ` +
           `try { ` +
           `  $pd = New-Object System.Drawing.Printing.PrintDocument; ` +
