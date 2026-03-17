@@ -55,10 +55,11 @@ export class PrintService {
       this.logger.log(`✅ PDF impresso com sucesso - Job: ${result.jobId}`);
       return result;
     } catch (error) {
-      this.logger.error(`❌ Erro na impressão PDF: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Erro na impressão PDF: ${message}`);
       return {
         success: false,
-        error: error.message,
+        error: message,
         printer: printerName,
         timestamp: new Date(),
       };
@@ -85,10 +86,11 @@ export class PrintService {
       this.logger.log(`✅ Texto impresso com sucesso - Job: ${result.jobId}`);
       return result;
     } catch (error) {
-      this.logger.error(`❌ Erro na impressão texto: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Erro na impressão texto: ${message}`);
       return {
         success: false,
-        error: error.message,
+        error: message,
         printer: printerName,
         timestamp: new Date(),
       };
