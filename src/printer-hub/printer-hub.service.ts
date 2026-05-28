@@ -6,7 +6,12 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { hostname } from 'os';
+import { PrinterInfo } from '../print/printers/base-printer.interface';
 import { PrintService } from '../print/print.service';
+import {
+  HeartbeatPrinterPayload,
+  PrinterHubRepository,
+} from './printer-hub.repository';
 
 interface HubJob {
   job_id: string;
@@ -23,9 +28,15 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   private claimTimer: NodeJS.Timeout | null = null;
   private isClaiming = false;
 
+  private static readonly DEFAULT_HEARTBEAT_SECONDS = 90;
+  private static readonly DEFAULT_HARD_INACTIVE_MINUTES = 10;
+  private static readonly DEFAULT_LEASE_SECONDS = 45;
+  private static readonly TEMPORARY_SUCCESS_TTL_HOURS = 24;
+
   constructor(
     private readonly configService: ConfigService,
     private readonly printService: PrintService,
+    private readonly printerHubRepository: PrinterHubRepository,
   ) {}
 
   async onModuleInit() {
@@ -79,12 +90,10 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   }
 
   private get enabled(): boolean {
-    return this.configService.get<boolean>('printerHub.enabled', false);
-  }
-
-  private get baseUrl(): string {
-    const base = this.configService.get<string>('printerHub.baseUrl', '').trim();
-    return base.replace(/\/$/, '');
+    return (
+      this.configService.get<boolean>('printerHub.enabled', false) &&
+      this.printerHubRepository.isConfigured()
+    );
   }
 
   private get eventId(): string {
@@ -102,10 +111,6 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private get apiToken(): string {
-    return this.configService.get<string>('printerHub.apiToken', '');
-  }
-
   private get claimBatchSize(): number {
     const raw = this.configService.get<number>('printerHub.claimBatchSize', 1);
     if (raw <= 0) {
@@ -115,16 +120,48 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return Math.min(raw, 20);
   }
 
+  private get printerIdentityMap(): Record<string, string> {
+    const raw = this.configService.get<string>(
+      'printerHub.printerIdentityMap',
+      '{}',
+    );
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return {};
+      }
+
+      return Object.entries(parsed).reduce<Record<string, string>>(
+        (acc, [deviceId, alias]) => {
+          if (typeof alias === 'string' && alias.trim()) {
+            acc[this.normalizeIdentity(deviceId)] = alias.trim();
+          }
+
+          return acc;
+        },
+        {},
+      );
+    } catch (error) {
+      this.logger.warn(
+        'Invalid PRINTER_IDENTITY_MAP JSON; ignoring printer identity map',
+      );
+      return {};
+    }
+  }
+
   private async safeRegister() {
     try {
-      if (!this.baseUrl || !this.apiToken) {
-        this.logger.warn('Printer hub missing baseUrl or apiToken, skipping register');
+      if (!this.printerHubRepository.isConfigured()) {
+        this.logger.warn(
+          'Printer hub database is not configured; skipping register',
+        );
         return;
       }
 
-      await this.post('/agents/register', {
-        event_id: this.eventId,
-        agent_key: this.agentKey,
+      await this.printerHubRepository.registerAgent({
+        eventId: this.eventId,
+        agentKey: this.agentKey,
         name: this.agentName,
         version: process.env.npm_package_version || 'local',
         metadata: {
@@ -135,7 +172,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      this.logger.log('Agent register/upsert sent to printer hub');
+      this.logger.log('Agent register/upsert persisted to printer database');
     } catch (error) {
       this.logger.error(`Register failed: ${this.errorMessage(error)}`);
     }
@@ -143,67 +180,77 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
   private async safeHeartbeat() {
     try {
-      if (!this.baseUrl || !this.apiToken) {
+      if (!this.printerHubRepository.isConfigured()) {
         return;
       }
 
       const printers = await this.printService.getPrinters();
-      const payload = {
-        event_id: this.eventId,
-        agent_key: this.agentKey,
-        version: process.env.npm_package_version || 'local',
-        metadata: {
-          os: process.platform,
-          arch: process.arch,
-          hostname: hostname(),
-        },
-        health: 'healthy',
-        printers: printers.map((printer) => ({
-          printer_uid: this.buildPrinterUid(printer.name),
-          name: printer.name,
-          is_default: !!printer.isDefault,
-          is_online: printer.isOnline !== false,
-          capabilities: {
-            status: printer.status,
-            description: printer.description,
-          },
-        })),
-      };
 
-      await this.post('/agents/heartbeat', payload);
+      await this.printerHubRepository.heartbeat(
+        {
+          eventId: this.eventId,
+          agentKey: this.agentKey,
+          name: this.agentName,
+          version: process.env.npm_package_version || 'local',
+          metadata: {
+            os: process.platform,
+            arch: process.arch,
+            hostname: hostname(),
+          },
+        },
+        printers.map((printer) => this.toHeartbeatPrinter(printer)),
+        PrinterHubService.DEFAULT_HEARTBEAT_SECONDS,
+        PrinterHubService.DEFAULT_HARD_INACTIVE_MINUTES,
+      );
     } catch (error) {
       this.logger.error(`Heartbeat failed: ${this.errorMessage(error)}`);
     }
   }
 
   private async safeClaimAndProcess() {
-    if (this.isClaiming || !this.baseUrl || !this.apiToken) {
+    if (this.isClaiming || !this.printerHubRepository.isConfigured()) {
       return;
     }
 
     this.isClaiming = true;
 
     try {
-      const printers = await this.printService.getPrinters();
-      const supportedPrinters = printers.map((printer) =>
-        this.buildPrinterUid(printer.name),
+      await this.printerHubRepository.runMaintenance(
+        this.eventId,
+        PrinterHubService.DEFAULT_HEARTBEAT_SECONDS,
+        PrinterHubService.DEFAULT_HARD_INACTIVE_MINUTES,
+        PrinterHubService.TEMPORARY_SUCCESS_TTL_HOURS,
       );
+
+      const printers = await this.printService.getPrinters();
+      const printerIndex = new Map(
+        printers.map((printer) => [this.buildPrinterUid(printer), printer]),
+      );
+      const supportedPrinters = [...printerIndex.keys()];
 
       if (supportedPrinters.length === 0) {
         return;
       }
 
-      const response = await this.post('/jobs/claim', {
-        event_id: this.eventId,
-        agent_key: this.agentKey,
-        batch_size: this.claimBatchSize,
-        supported_printers: supportedPrinters,
-      });
+      const claimedJobs = await this.printerHubRepository.claimJobs(
+        this.eventId,
+        this.agentKey,
+        supportedPrinters,
+        this.claimBatchSize,
+        PrinterHubService.DEFAULT_LEASE_SECONDS,
+        PrinterHubService.DEFAULT_HEARTBEAT_SECONDS,
+      );
 
-      const jobs: HubJob[] = Array.isArray(response?.jobs) ? response.jobs : [];
+      const jobs: HubJob[] = claimedJobs.map((job) => ({
+        job_id: String(job.jobId),
+        mode: job.mode,
+        target_printer_uid: job.targetPrinterUid,
+        payload: job.payload,
+        idempotency_key: job.idempotencyKey,
+      }));
 
       for (const job of jobs) {
-        await this.processJob(job);
+        await this.processJob(job, printerIndex);
       }
     } catch (error) {
       this.logger.error(`Claim/process failed: ${this.errorMessage(error)}`);
@@ -212,14 +259,18 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processJob(job: HubJob) {
-    const startedAt = new Date().toISOString();
+  private async processJob(job: HubJob, printerIndex: Map<string, PrinterInfo>) {
+    const startedAt = new Date();
 
     try {
       const payload = job.payload || {};
       const type = payload.type;
+      const localPrinter = printerIndex.get(job.target_printer_uid);
       const printerName =
-        payload.printerName || this.printerNameFromUid(job.target_printer_uid);
+        payload.printerName ||
+        localPrinter?.systemName ||
+        localPrinter?.name ||
+        this.printerNameFromUid(job.target_printer_uid);
 
       if (!printerName) {
         throw new Error('Missing printer name for claimed job');
@@ -261,11 +312,12 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (success) {
-        await this.post(`/jobs/${job.job_id}/ack-success`, {
-          event_id: this.eventId,
-          agent_key: this.agentKey,
-          started_at: startedAt,
-          duration_ms: Date.now() - new Date(startedAt).getTime(),
+        await this.printerHubRepository.ackSuccess({
+          eventId: this.eventId,
+          agentKey: this.agentKey,
+          jobId: Number(job.job_id),
+          startedAt,
+          durationMs: Date.now() - startedAt.getTime(),
           metadata: {
             idempotency_key: job.idempotency_key,
             native_job_id: nativeJobId,
@@ -273,21 +325,24 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         });
       }
     } catch (error) {
-      await this.post(`/jobs/${job.job_id}/ack-failure`, {
-        event_id: this.eventId,
-        agent_key: this.agentKey,
-        started_at: startedAt,
-        error_code: 'PRINT_EXECUTION_ERROR',
-        error_message: this.errorMessage(error),
-        retryable: true,
-        metadata: {
-          idempotency_key: job.idempotency_key,
-        },
-      }).catch((ackError) => {
-        this.logger.error(
-          `Failed to ack failure for job ${job.job_id}: ${ackError?.message}`,
-        );
-      });
+      await this.printerHubRepository
+        .ackFailure({
+          eventId: this.eventId,
+          agentKey: this.agentKey,
+          jobId: Number(job.job_id),
+          startedAt,
+          errorCode: 'PRINT_EXECUTION_ERROR',
+          errorMessage: this.errorMessage(error),
+          retryable: true,
+          metadata: {
+            idempotency_key: job.idempotency_key,
+          },
+        })
+        .catch((ackError) => {
+          this.logger.error(
+            `Failed to ack failure for job ${job.job_id}: ${ackError?.message}`,
+          );
+        });
 
       this.logger.error(
         `Job ${job.job_id} failed: ${this.errorMessage(error)}`,
@@ -303,13 +358,32 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return 'Unexpected error';
   }
 
-  private buildPrinterUid(printerName: string): string {
+  private toHeartbeatPrinter(printer: PrinterInfo): HeartbeatPrinterPayload {
+    return {
+      printerUid: this.buildPrinterUid(printer),
+      displayName: this.resolveStableLabel(printer),
+      systemName: printer.systemName || printer.name,
+      isDefault: !!printer.isDefault,
+      isOnline: printer.isOnline !== false,
+      deviceId: printer.deviceId,
+      capabilities: {
+        status: printer.status,
+        description: printer.description,
+      },
+    };
+  }
+
+  private buildPrinterUid(printer: string | PrinterInfo): string {
+    const identity =
+      typeof printer === 'string'
+        ? this.normalizeIdentity(printer)
+        : this.resolveStableIdentity(printer);
     const prefix = this.configService.get<string>('printerHub.uidPrefix');
     if (prefix && prefix.trim().length > 0) {
-      return `${prefix.trim()}${printerName}`;
+      return `${prefix.trim()}${identity}`;
     }
 
-    return `${process.platform}://${printerName}`;
+    return `printer://${identity}`;
   }
 
   private printerNameFromUid(printerUid: string): string {
@@ -321,24 +395,35 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return printerUid;
   }
 
-  private async post(path: string, payload: any): Promise<any> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        Authorization: this.apiToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
+  private resolveStableLabel(printer: PrinterInfo): string {
+    const mapped = this.printerIdentityMap[this.normalizeIdentity(printer.deviceId)];
+    return mapped || printer.name;
+  }
 
-    const body = await response.json().catch(() => ({}));
+  private resolveStableIdentity(printer: PrinterInfo): string {
+    const normalizedDeviceId = this.normalizeIdentity(printer.deviceId);
+    const mapped = normalizedDeviceId
+      ? this.printerIdentityMap[normalizedDeviceId]
+      : undefined;
 
-    if (!response.ok) {
-      throw new Error(
-        `Hub POST ${path} failed with ${response.status}: ${JSON.stringify(body)}`,
-      );
+    if (mapped) {
+      return this.normalizeIdentity(mapped);
     }
 
-    return body;
+    if (normalizedDeviceId !== 'unknown-printer') {
+      return normalizedDeviceId;
+    }
+
+    return this.normalizeIdentity(printer.systemName || printer.name);
+  }
+
+  private normalizeIdentity(value: string | undefined): string {
+    return (
+      String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'unknown-printer'
+    );
   }
 }

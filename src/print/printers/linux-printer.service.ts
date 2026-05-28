@@ -30,6 +30,7 @@ export class LinuxPrinterService implements IPrinterService {
 
         printers.push({
           name,
+          systemName: name,
           isDefault: false,
           status: line.includes('enabled') ? 'ready' : 'disabled',
           isOnline: !line.includes('disabled'),

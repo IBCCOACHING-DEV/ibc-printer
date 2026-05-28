@@ -8,6 +8,15 @@ export default () => ({
     defaultPrinter: process.env.DEFAULT_PRINTER,
     timeout: parseInt(process.env.PRINT_TIMEOUT, 10) || 30000,
   },
+  printerDatabase: {
+    host: process.env.PRINTER_DATABASE_HOST || '',
+    port: parseInt(process.env.PRINTER_DATABASE_PORT, 10) || 3306,
+    user: process.env.PRINTER_DATABASE_USER || '',
+    password: process.env.PRINTER_DATABASE_PASSWORD || '',
+    database: process.env.PRINTER_DATABASE_NAME || '',
+    connectionLimit:
+      parseInt(process.env.PRINTER_DATABASE_POOL, 10) || 10,
+  },
   printerHub: {
     enabled: process.env.PRINTER_HUB_ENABLED === 'true',
     baseUrl: process.env.PRINTER_HUB_BASE_URL || '',
@@ -16,6 +25,7 @@ export default () => ({
     agentKey: process.env.PRINTER_AGENT_KEY || '',
     agentName: process.env.PRINTER_AGENT_NAME || '',
     uidPrefix: process.env.PRINTER_UID_PREFIX || '',
+    printerIdentityMap: process.env.PRINTER_IDENTITY_MAP || '{}',
     heartbeatIntervalMs:
       parseInt(process.env.PRINTER_HEARTBEAT_INTERVAL_MS, 10) || 30000,
     claimIntervalMs:

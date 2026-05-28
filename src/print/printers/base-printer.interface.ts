@@ -2,10 +2,12 @@ import { SrvRecord } from 'dns';
 
 export interface PrinterInfo {
   name: string;
+  systemName?: string;
   isDefault: boolean;
   status: string;
   isOnline: boolean;
   description?: string;
+  deviceId?: string;
 }
 
 export interface PrintResult {

@@ -19,14 +19,15 @@ export class WindowsPrinterService implements IPrinterService {
 
   async getPrinters(): Promise<PrinterInfo[]> {
     const { stdout } = await execAsync(
-      'powershell -Command "Get-Printer | Select-Object Name, Default, PrinterStatus, PortName | ConvertTo-Json -Compress"',
+      'powershell -Command "Get-CimInstance Win32_Printer | Select-Object Name, Default, PrinterStatus, PortName, PNPDeviceID, DriverName | ConvertTo-Json -Compress"',
     );
 
-    const raw: any[] = JSON.parse(stdout.trim());
-    const list = Array.isArray(raw) ? raw : [raw];
+    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : [];
+    const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
 
     return list.map((p) => ({
       name: p.Name,
+      systemName: p.Name,
       isDefault: p.Default === true,
       status: String(p.PrinterStatus ?? 'unknown'),
       isOnline: this.isPrinterOnline(
@@ -34,6 +35,7 @@ export class WindowsPrinterService implements IPrinterService {
         String(p.PortName ?? ''),
       ),
       description: `${p.Name} (${String(p.PortName ?? 'unknown-port')})`,
+      deviceId: String(p.PNPDeviceID ?? '').trim() || undefined,
     }));
   }
 
