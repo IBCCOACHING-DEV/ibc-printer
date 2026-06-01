@@ -120,36 +120,6 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return Math.min(raw, 20);
   }
 
-  private get printerIdentityMap(): Record<string, string> {
-    const raw = this.configService.get<string>(
-      'printerHub.printerIdentityMap',
-      '{}',
-    );
-
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return {};
-      }
-
-      return Object.entries(parsed).reduce<Record<string, string>>(
-        (acc, [deviceId, alias]) => {
-          if (typeof alias === 'string' && alias.trim()) {
-            acc[this.normalizeIdentity(deviceId)] = alias.trim();
-          }
-
-          return acc;
-        },
-        {},
-      );
-    } catch (error) {
-      this.logger.warn(
-        'Invalid PRINTER_IDENTITY_MAP JSON; ignoring printer identity map',
-      );
-      return {};
-    }
-  }
-
   private async safeRegister() {
     try {
       if (!this.printerHubRepository.isConfigured()) {
@@ -184,9 +154,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const printers = this.filterPrintersByIdentityMap(
-        await this.printService.getPrinters(),
-      );
+      const printers = await this.printService.getPrinters();
 
       await this.printerHubRepository.heartbeat(
         {
@@ -224,9 +192,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         PrinterHubService.TEMPORARY_SUCCESS_TTL_HOURS,
       );
 
-      const printers = this.filterPrintersByIdentityMap(
-        await this.printService.getPrinters(),
-      );
+      const printers = await this.printService.getPrinters();
       const printerIndex = new Map(
         printers.map((printer) => [this.buildPrinterUid(printer), printer]),
       );
@@ -365,7 +331,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   private toHeartbeatPrinter(printer: PrinterInfo): HeartbeatPrinterPayload {
     return {
       printerUid: this.buildPrinterUid(printer),
-      displayName: this.resolveStableLabel(printer),
+      displayName: printer.name,
       systemName: printer.systemName || printer.name,
       isDefault: !!printer.isDefault,
       isOnline: printer.isOnline !== false,
@@ -381,7 +347,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     const identity =
       typeof printer === 'string'
         ? this.normalizeIdentity(printer)
-        : this.resolveStableIdentity(printer);
+        : this.resolvePrinterIdentity(printer);
     const prefix = this.configService.get<string>('printerHub.uidPrefix');
     if (prefix && prefix.trim().length > 0) {
       return `${prefix.trim()}${identity}`;
@@ -399,23 +365,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return printerUid;
   }
 
-  private resolveStableLabel(printer: PrinterInfo): string {
-    const mapKey = this.resolveIdentityMapKey(printer);
-    if (mapKey) {
-      return this.printerIdentityMap[mapKey] || printer.name;
-    }
-
-    return printer.name;
-  }
-
-  private resolveStableIdentity(printer: PrinterInfo): string {
-    const mapKey = this.resolveIdentityMapKey(printer);
-    const mapped = mapKey ? this.printerIdentityMap[mapKey] : undefined;
-
-    if (mapped) {
-      return this.normalizeIdentity(mapped);
-    }
-
+  private resolvePrinterIdentity(printer: PrinterInfo): string {
     const normalizedDeviceId = this.normalizeIdentity(printer.deviceId);
 
     if (normalizedDeviceId !== 'unknown-printer') {
@@ -433,43 +383,5 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '') || 'unknown-printer'
     );
-  }
-
-  private resolveIdentityMapKey(printer: PrinterInfo): string | null {
-    const identityMap = this.printerIdentityMap;
-    const candidates = [
-      this.normalizeIdentity(printer.deviceId),
-      this.normalizeIdentity(printer.systemName || printer.name),
-      this.normalizeIdentity(printer.name),
-    ];
-
-    for (const candidate of candidates) {
-      if (candidate !== 'unknown-printer' && identityMap[candidate]) {
-        return candidate;
-      }
-    }
-
-    return null;
-  }
-
-  private filterPrintersByIdentityMap(printers: PrinterInfo[]): PrinterInfo[] {
-    const identityMap = this.printerIdentityMap;
-    const mapSize = Object.keys(identityMap).length;
-
-    if (mapSize === 0) {
-      return printers;
-    }
-
-    const filtered = printers.filter(
-      (printer) => this.resolveIdentityMapKey(printer) !== null,
-    );
-
-    if (filtered.length !== printers.length) {
-      this.logger.log(
-        `PRINTER_IDENTITY_MAP ativo: ${filtered.length}/${printers.length} impressoras mapeadas e disponibilizadas`,
-      );
-    }
-
-    return filtered;
   }
 }

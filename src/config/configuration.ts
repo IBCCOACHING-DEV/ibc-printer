@@ -25,7 +25,6 @@ export default () => ({
     agentKey: process.env.PRINTER_AGENT_KEY || '',
     agentName: process.env.PRINTER_AGENT_NAME || '',
     uidPrefix: process.env.PRINTER_UID_PREFIX || '',
-    printerIdentityMap: process.env.PRINTER_IDENTITY_MAP || '{}',
     heartbeatIntervalMs:
       parseInt(process.env.PRINTER_HEARTBEAT_INTERVAL_MS, 10) || 30000,
     claimIntervalMs:
