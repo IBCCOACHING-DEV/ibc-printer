@@ -437,16 +437,10 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
   private resolveIdentityMapKey(printer: PrinterInfo): string | null {
     const identityMap = this.printerIdentityMap;
-    const candidates = [
-      this.normalizeIdentity(printer.deviceId),
-      this.normalizeIdentity(printer.systemName || printer.name),
-      this.normalizeIdentity(printer.name),
-    ];
+    const candidate = this.normalizeIdentity(printer.deviceId);
 
-    for (const candidate of candidates) {
-      if (candidate !== 'unknown-printer' && identityMap[candidate]) {
-        return candidate;
-      }
+    if (candidate !== 'unknown-printer' && identityMap[candidate]) {
+      return candidate;
     }
 
     return null;
