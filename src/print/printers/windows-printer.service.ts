@@ -10,6 +10,7 @@ import * as temp from 'temp';
 import * as fs from 'fs-extra';
 import nodeHtmlToImage from 'node-html-to-image';
 import * as path from 'path';
+import QRCode from 'qrcode';
 
 const execAsync = promisify(exec);
 
@@ -86,9 +87,15 @@ export class WindowsPrinterService implements IPrinterService {
     printerName: string,
     copies: number = 1,
     course?: string,
+    studentId?: number,
   ): Promise<PrintResult> {
     const tempFileName = `print_${Date.now()}.png`;
     const tempImagePath = path.join(process.cwd(), tempFileName);
+    const qrCodeDataUrl = await this.buildQrCodeDataUrl(studentId);
+    const safeName = this.escapeHtml(name);
+    const safeNickname = this.escapeHtml(nickname);
+    const safeCourse = this.escapeHtml(course);
+    const safeStudentId = this.escapeHtml(studentId?.toString());
 
     try {
       await nodeHtmlToImage({
@@ -101,15 +108,17 @@ export class WindowsPrinterService implements IPrinterService {
                 width: 3000px;     
                 background-color: white;
                 padding: 0px;
-                magin: 0px;
-                display: flex;
-                flex-direction: column;
-                align-items: flex-start;
-                justify-content: flex-start;
+                margin: 0px;
               }
               .container { 
-                text-align: left; 
-                margin-left: 0px; 
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 70px;
+              }
+              .text-content {
+                text-align: left;
+                flex: 1;
               }
               .name { 
                 font-size: 170px; 
@@ -128,13 +137,30 @@ export class WindowsPrinterService implements IPrinterService {
                 color: #666;
                 font-family: Arial, sans-serif;
               }
+              .qr-content {
+                width: 250px;
+                text-align: center;
+              }
+              .qr-image {
+                width: 220px;
+                height: 220px;
+              }
+              .qr-id {
+                margin-top: 10px;
+                font-family: Arial, sans-serif;
+                font-size: 42px;
+                color: black;
+              }
             </style>
           </head>
           <body>
             <div class="container">
-              <div class="nickname">${nickname}</div>
-              <div class="name">${name}</div>
-              ${course ? `<div class="course">${course}</div>` : ''}
+              <div class="text-content">
+                <div class="nickname">${safeNickname}</div>
+                <div class="name">${safeName}</div>
+                ${safeCourse ? `<div class="course">${safeCourse}</div>` : ''}
+              </div>
+              ${qrCodeDataUrl ? `<div class="qr-content"><img class="qr-image" src="${qrCodeDataUrl}" alt="QR Code" /><div class="qr-id">ID ${safeStudentId}</div></div>` : ''}
             </div>
           </body>
         </html>
@@ -260,5 +286,34 @@ export class WindowsPrinterService implements IPrinterService {
 
   private escapePowerShellSingleQuoted(value: string): string {
     return String(value || '').replace(/'/g, "''");
+  }
+
+  private escapeHtml(value?: string): string {
+    if (!value) {
+      return '';
+    }
+
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  private async buildQrCodeDataUrl(studentId?: number): Promise<string | null> {
+    if (!studentId) {
+      return null;
+    }
+
+    return QRCode.toDataURL(studentId.toString(), {
+      errorCorrectionLevel: 'M',
+      margin: 0,
+      width: 220,
+      color: {
+        dark: '#000000',
+        light: '#FFFFFF',
+      },
+    });
   }
 }

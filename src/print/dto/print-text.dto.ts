@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsInt, Min } from 'class-validator';
 
 export class PrintTextDto {
   @IsString()
@@ -19,4 +19,9 @@ export class PrintTextDto {
   @IsString()
   @IsOptional()
   course?: string;
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  studentId?: number;
 }
