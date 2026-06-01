@@ -458,6 +458,20 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       (printer) => this.resolveIdentityMapKey(printer) !== null,
     );
 
+    if (filtered.length === 0 && printers.length > 0) {
+      const mapKeys = Object.keys(identityMap);
+      const discovered = printers.map((printer) => ({
+        name: printer.name,
+        systemName: printer.systemName,
+        deviceId: printer.deviceId || null,
+        normalizedDeviceId: this.normalizeIdentity(printer.deviceId),
+      }));
+
+      this.logger.warn(
+        `PRINTER_IDENTITY_MAP sem correspondencias por deviceId. map_keys=${JSON.stringify(mapKeys)} discovered=${JSON.stringify(discovered)}`,
+      );
+    }
+
     if (filtered.length !== printers.length) {
       this.logger.log(
         `PRINTER_IDENTITY_MAP ativo: ${filtered.length}/${printers.length} impressoras mapeadas e disponibilizadas`,
