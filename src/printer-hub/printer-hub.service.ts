@@ -130,22 +130,65 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      await this.post('/agents/register', {
-        event_id: this.eventId,
-        agent_key: this.agentKey,
-        name: this.agentName,
-        version: process.env.npm_package_version || 'local',
-        metadata: {
-          os: process.platform,
-          arch: process.arch,
-          hostname: hostname(),
-          node: process.version,
+      // await this.post('/agents/register', {
+      //   event_id: this.eventId,
+      //   agent_key: this.agentKey,
+      //   name: this.agentName,
+      //   version: process.env.npm_package_version || 'local',
+      //   metadata: {
+      //     os: process.platform,
+      //     arch: process.arch,
+      //     hostname: hostname(),
+      //     node: process.version,
+      //   },
+      // });
+
+      const agent = await prisma.printerAgent.upsert({
+        where: { agentKey: this.agentKey },
+        update: {
+          eventId: this.eventId,
+          name: this.agentName,
+          version: process.env.npm_package_version || 'local',
+          metadataJson: {
+            os: process.platform,
+            arch: process.arch,
+            hostname: hostname(),
+            node: process.version,
+          },
+          status: 'online',
+          lastSeenAt: new Date(),
+        },
+        create: {
+          eventId: this.eventId,
+          agentKey: this.agentKey,
+          name: this.agentName,
+          version: process.env.npm_package_version || 'local',
+          metadataJson: {
+            os: process.platform,
+            arch: process.arch,
+            hostname: hostname(),
+            node: process.version,
+          },
+          status: 'online',
+          lastSeenAt: new Date(),
         },
       });
 
-      this.logger.log('Agent register/upsert sent to printer hub');
+      this.logger.log('Agent register/upsert saved');
+      return {
+        success: true,
+        agent: {
+          id: agent.id.toString(),
+          status: agent.status,
+          server_time: new Date(),
+        },
+      };
     } catch (error) {
       this.logger.error(`Register failed: ${this.errorMessage(error)}`);
+      return {
+        success: false,
+        errors: [this.errorMessage(error)],
+      };
     }
   }
 
