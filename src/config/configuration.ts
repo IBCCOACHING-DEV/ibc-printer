@@ -20,7 +20,6 @@ export default () => ({
       parseInt(process.env.PRINTER_HEARTBEAT_INTERVAL_MS, 10) || 30000,
     claimIntervalMs:
       parseInt(process.env.PRINTER_CLAIM_INTERVAL_MS, 10) || 1500,
-    claimBatchSize:
-      parseInt(process.env.PRINTER_CLAIM_BATCH_SIZE, 10) || 1,
+    claimBatchSize: parseInt(process.env.PRINTER_CLAIM_BATCH_SIZE, 10) || 1,
   },
 });

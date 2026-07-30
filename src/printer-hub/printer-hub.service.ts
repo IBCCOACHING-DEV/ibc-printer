@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { hostname } from 'os';
 import { PrintService } from '../print/print.service';
+import prisma from '../lib/prisma';
 
 interface HubJob {
   job_id: string;
@@ -83,12 +84,17 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   }
 
   private get baseUrl(): string {
-    const base = this.configService.get<string>('printerHub.baseUrl', '').trim();
+    const base = this.configService
+      .get<string>('printerHub.baseUrl', '')
+      .trim();
     return base.replace(/\/$/, '');
   }
 
   private get eventId(): string {
-    return this.configService.get<string>('printerHub.eventId', 'default-event');
+    return this.configService.get<string>(
+      'printerHub.eventId',
+      'default-event',
+    );
   }
 
   private get agentKey(): string {
@@ -118,7 +124,9 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   private async safeRegister() {
     try {
       if (!this.baseUrl || !this.apiToken) {
-        this.logger.warn('Printer hub missing baseUrl or apiToken, skipping register');
+        this.logger.warn(
+          'Printer hub missing baseUrl or apiToken, skipping register',
+        );
         return;
       }
 

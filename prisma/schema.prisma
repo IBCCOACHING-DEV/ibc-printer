@@ -1,0 +1,103 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model PrinterAgent {
+  id           BigInt   @id @default(autoincrement())
+  eventId      String   @map("event_id")
+  agentKey     String   @unique @map("agent_key")
+  name         String
+  status       String   @default("online")
+  version      String?
+  metadataJson Json?    @map("metadata_json")
+  lastSeenAt   DateTime @map("last_seen_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  printers         Printer[]
+  leasedPrintJobs  PrintJob[]
+  printJobAttempts PrintJobAttempt[]
+
+  @@index([eventId, lastSeenAt])
+  @@map("printer_agents")
+}
+
+model Printer {
+  id               BigInt   @id @default(autoincrement())
+  eventId          String   @map("event_id")
+  printerAgentId   BigInt?  @map("printer_agent_id")
+  printerUid       String   @unique @map("printer_uid")
+  name             String
+  isDefault        Boolean  @default(false) @map("is_default")
+  isOnline         Boolean  @default(true) @map("is_online")
+  capabilitiesJson Json?    @map("capabilities_json")
+  statusReason     String?  @map("status_reason")
+  lastSeenAt       DateTime @map("last_seen_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  printerAgent PrinterAgent? @relation(fields: [printerAgentId], references: [id])
+
+  @@index([eventId, isOnline, lastSeenAt])
+  @@map("printers")
+}
+
+model PrintJob {
+  id               BigInt    @id @default(autoincrement())
+  eventId          String    @map("event_id")
+  targetPrinterUid String    @map("target_printer_uid")
+  payloadJson      Json      @map("payload_json")
+  mode             String    @default("temporary")
+  priority         Int       @default(0)
+  status           String    @default("pending")
+  attemptCount     Int       @default(0) @map("attempt_count")
+  maxAttempts      Int       @default(3) @map("max_attempts")
+  leasedByAgentId  BigInt?   @map("leased_by_agent_id")
+  leaseExpiresAt   DateTime? @map("lease_expires_at")
+  idempotencyKey   String    @unique @map("idempotency_key")
+  resultJson       Json?     @map("result_json")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  leasedByAgent PrinterAgent?    @relation(fields: [leasedByAgentId], references: [id])
+  attempts      PrintJobAttempt[]
+
+  @@index([status, eventId, priority, createdAt], map: "index_print_jobs_on_status_event_priority_created")
+  @@index([targetPrinterUid, status])
+  @@index([leaseExpiresAt, status])
+
+  @@map("print_jobs")
+}
+
+model PrintJobAttempt {
+  id             BigInt    @id @default(autoincrement())
+  printJobId     BigInt    @map("print_job_id")
+  printerAgentId BigInt    @map("printer_agent_id")
+  startedAt      DateTime  @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  success        Boolean   @default(false)
+  errorCode      String?   @map("error_code")
+  errorMessage   String?   @map("error_message")
+  metadataJson   Json?     @map("metadata_json")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  printJob     PrintJob     @relation(fields: [printJobId], references: [id])
+  printerAgent PrinterAgent @relation(fields: [printerAgentId], references: [id])
+
+  @@map("print_job_attempts")
+}
