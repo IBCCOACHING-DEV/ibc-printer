@@ -1,6 +1,7 @@
 import {
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
@@ -348,5 +349,209 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     }
 
     return body;
+  }
+
+  async claimJobs(payload: {
+    event_id: string;
+    agent_key: string;
+    batch_size?: number;
+    supported_printers?: string[];
+  }) {
+    const eventId = payload.event_id;
+    const agentKey = payload.agent_key;
+    const supportedPrinters = Array.isArray(payload.supported_printers)
+      ? payload.supported_printers
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+      : [];
+
+    const batchSize = Math.min(
+      Math.max(payload.batch_size ?? 1, 1),
+      20,
+    );
+    const leaseSeconds = 45;
+    const now = new Date();
+    const offlineThreshold = new Date(now.getTime() - 90 * 1000);
+    const inactiveThreshold = new Date(now.getTime() - 10 * 60 * 1000);
+    const cleanupThreshold = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    return await prisma.$transaction(async (tx) => {
+      const agent = await tx.printerAgent.findFirst({
+        where: {
+          eventId,
+          agentKey,
+        },
+      });
+
+      if (!agent) {
+        throw new NotFoundException('Printer agent not found');
+      }
+
+      await tx.printJob.updateMany({
+        where: {
+          status: 'leased',
+          leaseExpiresAt: {
+            lt: now,
+          },
+        },
+        data: {
+          status: 'pending',
+          leasedByAgentId: null,
+          leaseExpiresAt: null,
+        },
+      });
+
+      await tx.printer.updateMany({
+        where: {
+          eventId,
+          lastSeenAt: {
+            lt: offlineThreshold,
+          },
+        },
+        data: {
+          isOnline: false,
+          statusReason: 'offline',
+        },
+      });
+
+      await tx.printer.updateMany({
+        where: {
+          eventId,
+          lastSeenAt: {
+            lt: inactiveThreshold,
+          },
+        },
+        data: {
+          isOnline: false,
+          statusReason: 'inactive',
+        },
+      });
+
+      await tx.printerAgent.updateMany({
+        where: {
+          eventId,
+          lastSeenAt: {
+            lt: offlineThreshold,
+          },
+        },
+        data: {
+          status: 'offline',
+        },
+      });
+
+      const oldTempJobs = await tx.printJob.findMany({
+        where: {
+          mode: 'temporary',
+          status: 'succeeded',
+          updatedAt: {
+            lt: cleanupThreshold,
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (oldTempJobs.length > 0) {
+        const oldIds = oldTempJobs.map((job) => job.id);
+        await tx.printJobAttempt.deleteMany({
+          where: {
+            printJobId: {
+              in: oldIds,
+            },
+          },
+        });
+        await tx.printJob.deleteMany({
+          where: {
+            id: {
+              in: oldIds,
+            },
+          },
+        });
+      }
+
+      if (supportedPrinters.length === 0) {
+        return {
+          success: true,
+          lease_seconds: leaseSeconds,
+          jobs: [],
+        };
+      }
+
+      const printerPlaceholders = supportedPrinters
+        .map(() => '?')
+        .join(', ');
+      const rows = (await tx.$queryRawUnsafe(
+        `SELECT pj.id
+         FROM print_jobs pj
+         INNER JOIN printers p
+           ON p.event_id = pj.event_id
+           AND p.printer_uid = pj.target_printer_uid
+         WHERE pj.status = 'pending'
+           AND pj.event_id = ?
+           AND pj.target_printer_uid IN (${printerPlaceholders})
+           AND p.is_online = TRUE
+           AND p.last_seen_at >= ?
+           AND (pj.lease_expires_at IS NULL OR pj.lease_expires_at < ?)
+         ORDER BY pj.priority DESC, pj.created_at ASC
+         LIMIT ?
+         FOR UPDATE`,
+        eventId,
+        ...supportedPrinters,
+        offlineThreshold,
+        now,
+        batchSize,
+      )) as Array<{ id: bigint }>;
+
+      const jobIds = rows.map((row) => Number(row.id));
+      if (jobIds.length === 0) {
+        return {
+          success: true,
+          lease_seconds: leaseSeconds,
+          jobs: [],
+        };
+      }
+
+      const leaseExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
+
+      await tx.printJob.updateMany({
+        where: {
+          id: {
+            in: jobIds,
+          },
+        },
+        data: {
+          status: 'leased',
+          leasedByAgentId: agent.id,
+          leaseExpiresAt,
+        },
+      });
+
+      const jobs = await tx.printJob.findMany({
+        where: {
+          id: {
+            in: jobIds,
+          },
+        },
+      });
+
+      const jobsById = new Map(jobs.map((job) => [Number(job.id), job]));
+      const orderedJobs = jobIds
+        .map((id) => jobsById.get(id))
+        .filter((job): job is typeof jobs[number] => Boolean(job));
+
+      return {
+        success: true,
+        lease_seconds: leaseSeconds,
+        jobs: orderedJobs.map((job) => ({
+          job_id: job.id.toString(),
+          mode: job.mode,
+          target_printer_uid: job.targetPrinterUid,
+          payload: job.payloadJson,
+          idempotency_key: job.idempotencyKey,
+        })),
+      };
+    });
   }
 }
