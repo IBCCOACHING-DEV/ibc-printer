@@ -392,7 +392,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     nativeJobId: string | undefined,
   ) {
     const agent = await prisma.printerAgent.findUnique({
-      where: { agent_key: this.agentKey },
+      where: { agentKey: this.agentKey },
     });
 
     if (!agent) {
