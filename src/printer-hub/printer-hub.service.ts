@@ -371,31 +371,12 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (success) {
-        await this.post(`/jobs/${job.job_id}/ack-success`, {
-          event_id: this.eventId,
-          agent_key: this.agentKey,
-          started_at: startedAt,
-          duration_ms: Date.now() - new Date(startedAt).getTime(),
-          metadata: {
-            idempotency_key: job.idempotency_key,
-            native_job_id: nativeJobId,
-          },
-        });
+        await this.ackSuccess(job, startedAt, nativeJobId);
       }
     } catch (error) {
-      await this.post(`/jobs/${job.job_id}/ack-failure`, {
-        event_id: this.eventId,
-        agent_key: this.agentKey,
-        started_at: startedAt,
-        error_code: 'PRINT_EXECUTION_ERROR',
-        error_message: this.errorMessage(error),
-        retryable: true,
-        metadata: {
-          idempotency_key: job.idempotency_key,
-        },
-      }).catch((ackError) => {
+      await this.ackFailure(job, startedAt, error, true).catch((ackError) => {
         this.logger.error(
-          `Failed to ack failure for job ${job.job_id}: ${ackError?.message}`,
+          `Failed to ack failure for job ${job.job_id} via Prisma: ${ackError?.message}`,
         );
       });
 
@@ -403,6 +384,143 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         `Job ${job.job_id} failed: ${this.errorMessage(error)}`,
       );
     }
+  }
+
+  private async ackSuccess(
+    job: HubJob,
+    startedAt: string,
+    nativeJobId: string | undefined,
+  ) {
+    const agent = await prisma.printerAgent.findUnique({
+      where: { agent_key: this.agentKey },
+    });
+
+    if (!agent) {
+      throw new Error(`Agent with key ${this.agentKey} not found.`);
+    }
+
+    const jobToUpdate = await prisma.printJob.findUnique({
+      where: { id: job.job_id },
+    });
+
+    if (!jobToUpdate) {
+      throw new Error(`Job ${job.job_id} not found.`);
+    }
+
+    if (jobToUpdate.leasedByAgentId !== agent.id) {
+      throw new Error(
+        `Job ${job.job_id} does not belong to agent ${agent.id}.`,
+      );
+    }
+
+    const now = new Date();
+    const durationMs = now.getTime() - new Date(startedAt).getTime();
+    const metadata = {
+      idempotency_key: job.idempotency_key,
+      native_job_id: nativeJobId,
+    };
+
+    await prisma.$transaction([
+      prisma.printJob.update({
+        where: { id: job.job_id },
+        data: {
+          status: 'succeeded',
+          leaseExpiresAt: null,
+          resultJson: {
+            duration_ms: durationMs,
+            metadata: metadata,
+            acknowledged_at: now.toISOString(),
+          },
+        },
+      }),
+      prisma.printJobAttempt.create({
+        data: {
+          printJobId: job.job_id,
+          printerAgentId: agent.id,
+          startedAt: new Date(startedAt),
+          finishedAt: now,
+          success: true,
+          metadataJson: metadata,
+        },
+      }),
+    ]);
+
+    this.logger.log(`Job ${job.job_id} successfully acknowledged via Prisma.`);
+  }
+
+  private async ackFailure(
+    job: HubJob,
+    startedAt: string,
+    error: unknown,
+    retryable: boolean,
+  ) {
+    const agent = await prisma.printerAgent.findUnique({
+      where: { agent_key: this.agentKey },
+    });
+
+    if (!agent) {
+      throw new Error(`Agent with key ${this.agentKey} not found.`);
+    }
+
+    const jobToUpdate = await prisma.printJob.findUnique({
+      where: { id: job.job_id },
+    });
+
+    if (!jobToUpdate) {
+      throw new Error(`Job ${job.job_id} not found.`);
+    }
+
+    if (jobToUpdate.leasedByAgentId !== agent.id) {
+      throw new Error(
+        `Job ${job.job_id} does not belong to agent ${agent.id}.`,
+      );
+    }
+
+    const now = new Date();
+    const errorCode = 'PRINT_EXECUTION_ERROR';
+    const errorMessage = this.errorMessage(error);
+
+    const newAttemptCount = jobToUpdate.attemptCount + 1;
+    const canRetry = retryable && newAttemptCount < jobToUpdate.maxAttempts;
+    const nextStatus = canRetry
+      ? 'pending'
+      : newAttemptCount >= jobToUpdate.maxAttempts
+        ? 'dead'
+        : 'failed';
+
+    await prisma.$transaction([
+      prisma.printJob.update({
+        where: { id: job.job_id },
+        data: {
+          attemptCount: newAttemptCount,
+          status: nextStatus,
+          leaseExpiresAt: null,
+          leasedByAgentId: null,
+          resultJson: {
+            error_code: errorCode,
+            error_message: errorMessage,
+            retryable: retryable,
+            acknowledged_at: now.toISOString(),
+          },
+        },
+      }),
+      prisma.printJobAttempt.create({
+        data: {
+          printJobId: job.job_id,
+          printerAgentId: agent.id,
+          startedAt: new Date(startedAt),
+          finishedAt: now,
+          success: false,
+          errorCode: errorCode,
+          errorMessage: errorMessage,
+          metadataJson: { idempotency_key: job.idempotency_key },
+        },
+      }),
+    ]);
+
+    this.logger.log(
+      `Job ${job.job_id} successfully acknowledged failure via Prisma. New status: ${nextStatus}`,
+    );
   }
 
   private errorMessage(error: unknown): string {
