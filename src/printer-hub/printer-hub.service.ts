@@ -401,7 +401,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     }
 
     const jobToUpdate = await prisma.printJob.findUnique({
-      where: { id: job.job_id },
+      where: { id: Number(job.job_id) },
     });
 
     if (!jobToUpdate) {
@@ -423,7 +423,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
     await prisma.$transaction([
       prisma.printJob.update({
-        where: { id: job.job_id },
+        where: { id: Number(job.job_id) },
         data: {
           status: 'succeeded',
           leaseExpiresAt: null,
@@ -436,7 +436,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       }),
       prisma.printJobAttempt.create({
         data: {
-          printJobId: job.job_id,
+          printJobId: Number(job.job_id),
           printerAgentId: agent.id,
           startedAt: new Date(startedAt),
           finishedAt: now,
@@ -456,7 +456,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     retryable: boolean,
   ) {
     const agent = await prisma.printerAgent.findUnique({
-      where: { agent_key: this.agentKey },
+      where: { agentKey: this.agentKey },
     });
 
     if (!agent) {
@@ -464,7 +464,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     }
 
     const jobToUpdate = await prisma.printJob.findUnique({
-      where: { id: job.job_id },
+      where: { id: Number(job.job_id) },
     });
 
     if (!jobToUpdate) {
@@ -491,7 +491,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
     await prisma.$transaction([
       prisma.printJob.update({
-        where: { id: job.job_id },
+        where: { id: Number(job.job_id) },
         data: {
           attemptCount: newAttemptCount,
           status: nextStatus,
@@ -507,7 +507,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       }),
       prisma.printJobAttempt.create({
         data: {
-          printJobId: job.job_id,
+          printJobId: Number(job.job_id),
           printerAgentId: agent.id,
           startedAt: new Date(startedAt),
           finishedAt: now,
@@ -689,10 +689,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
           .filter((item) => item.length > 0)
       : [];
 
-    const batchSize = Math.min(
-      Math.max(payload.batch_size ?? 1, 1),
-      20,
-    );
+    const batchSize = Math.min(Math.max(payload.batch_size ?? 1, 1), 20);
     const leaseSeconds = 45;
     const now = new Date();
     const offlineThreshold = new Date(now.getTime() - 90 * 1000);
@@ -802,9 +799,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         };
       }
 
-      const printerPlaceholders = supportedPrinters
-        .map(() => '?')
-        .join(', ');
+      const printerPlaceholders = supportedPrinters.map(() => '?').join(', ');
       const rows = (await tx.$queryRawUnsafe(
         `SELECT pj.id
          FROM print_jobs pj
@@ -862,7 +857,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       const jobsById = new Map(jobs.map((job) => [Number(job.id), job]));
       const orderedJobs = jobIds
         .map((id) => jobsById.get(id))
-        .filter((job): job is typeof jobs[number] => Boolean(job));
+        .filter((job): job is (typeof jobs)[number] => Boolean(job));
 
       return {
         success: true,
