@@ -10,6 +10,25 @@ import { hostname } from 'os';
 import { PrintService } from '../print/print.service';
 import prisma from '../lib/prisma';
 
+
+export interface ProcessHeartbeatPayload {
+  event_id: string;
+  agent_key: string;
+  version?: string;
+  metadata?: {
+    os?: string;
+    arch?: string;
+    hostname?: string;
+    node?: string;
+  };
+  printers: Array<{
+    printerUid: string;
+    name: string;
+    isDefault: boolean;
+    isOnline: boolean;
+    capabilitiesJson?: Record<string, string>;
+  }>;
+}
 interface HubJob {
   job_id: string;
   mode: 'temporary' | 'queue';
@@ -18,6 +37,7 @@ interface HubJob {
   idempotency_key: string;
 }
 
+
 @Injectable()
 export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrinterHubService.name);
@@ -25,7 +45,11 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   private readonly hardInactiveAfterMinutes = 10;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private claimTimer: NodeJS.Timeout | null = null;
+  private registrationTimer: NodeJS.Timeout | null = null;
   private isClaiming = false;
+  private isHubWorkRunning = false;
+  private agentId: bigint | null = null;
+  private loopsStarted = false;
 
   constructor(
     private readonly configService: ConfigService,
@@ -38,7 +62,12 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    await this.safeRegister();
+    const registered = await this.safeRegister();
+    if (!registered.success || !this.agentId) {
+      this.scheduleRegistrationRetry();
+      return;
+    }
+
     await this.safeHeartbeat();
     this.startLoops();
   }
@@ -53,16 +82,25 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.claimTimer);
       this.claimTimer = null;
     }
+
+    if (this.registrationTimer) {
+      clearInterval(this.registrationTimer);
+      this.registrationTimer = null;
+    }
   }
 
   private startLoops() {
+    if (this.loopsStarted) {
+      return;
+    }
+
     const heartbeatMs = this.configService.get<number>(
       'printerHub.heartbeatIntervalMs',
       30000,
     );
     const claimMs = this.configService.get<number>(
       'printerHub.claimIntervalMs',
-      1500,
+      500,
     );
 
     this.heartbeatTimer = setInterval(() => {
@@ -80,6 +118,28 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `Printer hub loops started (heartbeat=${heartbeatMs}ms, claim=${claimMs}ms)`,
     );
+    this.loopsStarted = true;
+  }
+
+  private scheduleRegistrationRetry() {
+    if (this.registrationTimer) {
+      return;
+    }
+
+    this.registrationTimer = setInterval(async () => {
+      const registered = await this.safeRegister();
+      if (!registered.success || !this.agentId) {
+        return;
+      }
+
+      if (this.registrationTimer) {
+        clearInterval(this.registrationTimer);
+        this.registrationTimer = null;
+      }
+
+      await this.safeHeartbeat();
+      this.startLoops();
+    }, 15000);
   }
 
   private get enabled(): boolean {
@@ -176,6 +236,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.logger.log('Agent register/upsert saved');
+      this.agentId = agent.id;
       return {
         success: true,
         agent: {
@@ -194,9 +255,19 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async safeHeartbeat() {
+    if (!this.agentId) {
+      return;
+    }
+
+    if (this.isHubWorkRunning) {
+      return;
+    }
+
+    this.isHubWorkRunning = true;
+
     try {
       const printers = await this.printService.getPrinters();
-      const now = new Date();
+      
       const reportedPrinters = printers.map((printer) => ({
         printerUid: this.buildPrinterUid(printer.name),
         name: printer.name,
@@ -204,91 +275,165 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         isOnline: printer.isOnline !== false,
         capabilitiesJson: this.buildPrinterCapabilities(printer),
       }));
-      const reportedPrinterUids = reportedPrinters.map(
-        (printer) => printer.printerUid,
-      );
 
-      await this.runMaintenance(now);
-
-      await prisma.$transaction(async (transaction) => {
-        const agent = await transaction.printerAgent.findFirst({
-          where: {
-            eventId: this.eventId,
-            agentKey: this.agentKey,
-          },
-        });
-
-        if (!agent) {
-          throw new Error('Agente nao encontrado');
-        }
-
-        await transaction.printerAgent.update({
-          where: { id: agent.id },
-          data: {
-            status: 'online',
-            version: process.env.npm_package_version || 'local',
-            metadataJson: this.buildAgentMetadata(),
-            lastSeenAt: now,
-          },
-        });
-
-        for (const printer of reportedPrinters) {
-          await transaction.printer.upsert({
-            where: { printerUid: printer.printerUid },
-            update: {
-              eventId: this.eventId,
-              printerAgentId: agent.id,
-              name: printer.name,
-              isDefault: printer.isDefault,
-              isOnline: printer.isOnline,
-              capabilitiesJson: printer.capabilitiesJson,
-              statusReason: null,
-              lastSeenAt: now,
-            },
-            create: {
-              eventId: this.eventId,
-              printerAgentId: agent.id,
-              printerUid: printer.printerUid,
-              name: printer.name,
-              isDefault: printer.isDefault,
-              isOnline: printer.isOnline,
-              capabilitiesJson: printer.capabilitiesJson,
-              statusReason: null,
-              lastSeenAt: now,
-            },
-          });
-        }
-
-        await transaction.printer.updateMany({
-          where: {
-            eventId: this.eventId,
-            printerAgentId: agent.id,
-            ...(reportedPrinterUids.length > 0
-              ? { printerUid: { notIn: reportedPrinterUids } }
-              : {}),
-          },
-          data: {
-            isOnline: false,
-            statusReason: 'not_reported_in_heartbeat',
-          },
-        });
-
-        await this.markStaleEntitiesOffline(transaction, now);
-      });
-
-      return {
-        heartbeat_interval_seconds: this.heartbeatIntervalSeconds,
-        stale_after_seconds: this.staleAfterSeconds,
-        hard_inactive_after_minutes: this.hardInactiveAfterMinutes,
-        server_time: now,
+      const payload = {
+        event_id: this.eventId,
+        agent_key: this.agentKey,
+        version: process.env.npm_package_version || 'local',
+        metadata: this.buildAgentMetadata(),
+        printers: reportedPrinters,
       };
+      
+      const response = await this.processHeartbeat(payload);
+      this.logger.log('Heartbeat processado localmente');
+      return response;
     } catch (error) {
-      this.logger.error(`Heartbeat failed: ${this.errorMessage(error)}`);
+      this.logger.error(`Falha no processamento de heartbeat local: ${this.errorMessage(error)}`);
+    } finally {
+      this.isHubWorkRunning = false;
     }
   }
 
+  async processHeartbeat(payload: ProcessHeartbeatPayload) {
+    const now = new Date();
+    const eventId = payload.event_id;
+    const agentKey = payload.agent_key;
+    const reportedPrinters = payload.printers || [];
+
+    const agent = await prisma.printerAgent.findFirst({
+      where: { eventId, agentKey },
+    });
+
+    if (!agent) throw new NotFoundException('Agente nao encontrado');
+
+    // 1. TRANSAÇÃO ULTRA RÁPIDA: Apenas atualizações pontuais (Correção 4)
+    await prisma.$transaction(async (tx) => {
+      await tx.printerAgent.update({
+        where: { id: agent.id },
+        data: {
+          status: 'online',
+          version: payload.version,
+          metadataJson: payload.metadata,
+          lastSeenAt: now,
+        },
+      });
+
+      for (const printer of reportedPrinters) {
+        await tx.printer.upsert({
+          where: { printerUid: printer.printerUid },
+          update: {
+            eventId,
+            printerAgentId: agent.id,
+            name: printer.name,
+            isDefault: printer.isDefault,
+            isOnline: printer.isOnline,
+            capabilitiesJson: printer.capabilitiesJson,
+            statusReason: null,
+            lastSeenAt: now, // Atualiza para o tempo exato
+          },
+          create: { 
+            eventId,
+            printerAgentId: agent.id,
+            printerUid: printer.printerUid,
+            name: printer.name,
+            isDefault: printer.isDefault,
+            isOnline: printer.isOnline,
+            capabilitiesJson: printer.capabilitiesJson,
+            statusReason: null,
+            lastSeenAt: now,
+           },
+        });
+      }
+    }, { maxWait: 5000, timeout: 10000 });
+
+    // 2. FORA DA TRANSAÇÃO: Update inteligente sem NOT IN (Correção 2 e 3)
+    await prisma.printer.updateMany({
+      where: {
+        eventId,
+        printerAgentId: agent.id,
+        // Genial: Se não foi atualizada no loop acima, ficou no passado!
+        lastSeenAt: { lt: now }, 
+      },
+      data: { 
+        isOnline: false, 
+        statusReason: 'not_reported_in_heartbeat' 
+      },
+    });
+
+    // 3. LIMPEZAS EM PARALELO
+    await Promise.allSettled([
+      this.runMaintenance(now),
+      this.markStaleEntitiesOffline(now)
+    ]);
+
+    return {
+      heartbeat_interval_seconds: this.heartbeatIntervalSeconds,
+      stale_after_seconds: this.staleAfterSeconds,
+      hard_inactive_after_minutes: this.hardInactiveAfterMinutes,
+      server_time: now,
+    };
+  }
+
+  private async runMaintenance(now: Date) {
+    await prisma.printJob.updateMany({
+      where: {
+        status: 'leased',
+        leaseExpiresAt: { lt: now },
+      },
+      data: {
+        status: 'pending',
+        leasedByAgentId: null,
+        leaseExpiresAt: null,
+      },
+    });
+
+    await prisma.printJob.deleteMany({
+      where: {
+        mode: 'temporary',
+        status: { in: ['succeeded', 'failed', 'dead'] },
+        updatedAt: { lt: this.minutesBefore(now, this.hardInactiveAfterMinutes) },
+      },
+    });
+  }
+
+  private async markStaleEntitiesOffline(now: Date) {
+    const staleBefore = this.secondsBefore(now, this.staleAfterSeconds);
+
+    await prisma.printer.updateMany({
+      where: {
+        eventId: this.eventId,
+        isOnline: true,
+        lastSeenAt: { lt: staleBefore },
+      },
+      data: {
+        isOnline: false,
+        statusReason: 'stale_heartbeat',
+      },
+    });
+
+    await prisma.printerAgent.updateMany({
+      where: {
+        eventId: this.eventId,
+        status: 'online',
+        lastSeenAt: { lt: staleBefore },
+      },
+      data: { status: 'offline' },
+    });
+  }
+
   private async safeClaimAndProcess() {
-    if (this.isClaiming || !this.baseUrl || !this.apiToken) {
+    if (!this.agentId) {
+      return;
+    }
+
+    if (this.isHubWorkRunning) {
+      return;
+    }
+
+    this.isHubWorkRunning = true;
+
+    if (this.isClaiming) {
+      this.isHubWorkRunning = false;
       return;
     }
 
@@ -304,22 +449,27 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const response = await this.post('/jobs/claim', {
+      const claimPayload = {
         event_id: this.eventId,
         agent_key: this.agentKey,
         batch_size: this.claimBatchSize,
         supported_printers: supportedPrinters,
-      });
+      };
 
+      const response = await this.claimJobs(claimPayload);
       const jobs: HubJob[] = Array.isArray(response?.jobs) ? response.jobs : [];
 
+      if (jobs.length > 0) {
+        this.logger.log(`Reivindicado(s) ${jobs.length} job(s) localmente.`);
+      }
       for (const job of jobs) {
         await this.processJob(job);
       }
     } catch (error) {
-      this.logger.error(`Claim/process failed: ${this.errorMessage(error)}`);
+      this.logger.error(`Falha no loop de reinvindicação/processamento local: ${this.errorMessage(error)}`);
     } finally {
       this.isClaiming = false;
+      this.isHubWorkRunning = false;
     }
   }
 
@@ -565,68 +715,6 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return capabilities;
   }
 
-  private async runMaintenance(now: Date) {
-    await prisma.printJob.updateMany({
-      where: {
-        status: 'leased',
-        leaseExpiresAt: {
-          lt: now,
-        },
-      },
-      data: {
-        status: 'pending',
-        leasedByAgentId: null,
-        leaseExpiresAt: null,
-      },
-    });
-
-    await this.markStaleEntitiesOffline(prisma, now);
-
-    await prisma.printJob.deleteMany({
-      where: {
-        mode: 'temporary',
-        status: {
-          in: ['completed', 'failed', 'cancelled', 'canceled'],
-        },
-        updatedAt: {
-          lt: this.minutesBefore(now, this.hardInactiveAfterMinutes),
-        },
-      },
-    });
-  }
-
-  private async markStaleEntitiesOffline(
-    client: Pick<typeof prisma, 'printer' | 'printerAgent'>,
-    now: Date,
-  ) {
-    const staleBefore = this.secondsBefore(now, this.staleAfterSeconds);
-
-    await client.printer.updateMany({
-      where: {
-        isOnline: true,
-        lastSeenAt: {
-          lt: staleBefore,
-        },
-      },
-      data: {
-        isOnline: false,
-        statusReason: 'stale_heartbeat',
-      },
-    });
-
-    await client.printerAgent.updateMany({
-      where: {
-        status: 'online',
-        lastSeenAt: {
-          lt: staleBefore,
-        },
-      },
-      data: {
-        status: 'offline',
-      },
-    });
-  }
-
   private secondsBefore(date: Date, seconds: number): Date {
     return new Date(date.getTime() - seconds * 1000);
   }
@@ -674,7 +762,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return body;
   }
 
-  async claimJobs(payload: {
+ async claimJobs(payload: {
     event_id: string;
     agent_key: string;
     batch_size?: number;
@@ -693,113 +781,22 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     const leaseSeconds = 45;
     const now = new Date();
     const offlineThreshold = new Date(now.getTime() - 90 * 1000);
-    const inactiveThreshold = new Date(now.getTime() - 10 * 60 * 1000);
-    const cleanupThreshold = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    
+    if (supportedPrinters.length === 0) {
+      return {
+        success: true,
+        lease_seconds: leaseSeconds,
+        jobs: [],
+      };
+    }
 
-    return await prisma.$transaction(async (tx) => {
-      const agent = await tx.printerAgent.findFirst({
-        where: {
-          eventId,
-          agentKey,
-        },
-      });
+    if (!this.agentId) {
+      throw new NotFoundException('Printer agent not found in memory');
+    }
 
-      if (!agent) {
-        throw new NotFoundException('Printer agent not found');
-      }
-
-      await tx.printJob.updateMany({
-        where: {
-          status: 'leased',
-          leaseExpiresAt: {
-            lt: now,
-          },
-        },
-        data: {
-          status: 'pending',
-          leasedByAgentId: null,
-          leaseExpiresAt: null,
-        },
-      });
-
-      await tx.printer.updateMany({
-        where: {
-          eventId,
-          lastSeenAt: {
-            lt: offlineThreshold,
-          },
-        },
-        data: {
-          isOnline: false,
-          statusReason: 'offline',
-        },
-      });
-
-      await tx.printer.updateMany({
-        where: {
-          eventId,
-          lastSeenAt: {
-            lt: inactiveThreshold,
-          },
-        },
-        data: {
-          isOnline: false,
-          statusReason: 'inactive',
-        },
-      });
-
-      await tx.printerAgent.updateMany({
-        where: {
-          eventId,
-          lastSeenAt: {
-            lt: offlineThreshold,
-          },
-        },
-        data: {
-          status: 'offline',
-        },
-      });
-
-      const oldTempJobs = await tx.printJob.findMany({
-        where: {
-          mode: 'temporary',
-          status: 'succeeded',
-          updatedAt: {
-            lt: cleanupThreshold,
-          },
-        },
-        select: {
-          id: true,
-        },
-      });
-
-      if (oldTempJobs.length > 0) {
-        const oldIds = oldTempJobs.map((job) => job.id);
-        await tx.printJobAttempt.deleteMany({
-          where: {
-            printJobId: {
-              in: oldIds,
-            },
-          },
-        });
-        await tx.printJob.deleteMany({
-          where: {
-            id: {
-              in: oldIds,
-            },
-          },
-        });
-      }
-
-      if (supportedPrinters.length === 0) {
-        return {
-          success: true,
-          lease_seconds: leaseSeconds,
-          jobs: [],
-        };
-      }
-
+    const orderedJobs = await prisma.$transaction(async (tx) => {
       const printerPlaceholders = supportedPrinters.map(() => '?').join(', ');
+      
       const rows = (await tx.$queryRawUnsafe(
         `SELECT pj.id
          FROM print_jobs pj
@@ -814,7 +811,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
            AND (pj.lease_expires_at IS NULL OR pj.lease_expires_at < ?)
          ORDER BY pj.priority DESC, pj.created_at ASC
          LIMIT ?
-         FOR UPDATE`,
+         FOR UPDATE SKIP LOCKED`, // <-- ISSO SALVA SUA APLICAÇÃO DE TRAVAR!
         eventId,
         ...supportedPrinters,
         offlineThreshold,
@@ -823,53 +820,35 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       )) as Array<{ id: bigint }>;
 
       const jobIds = rows.map((row) => Number(row.id));
-      if (jobIds.length === 0) {
-        return {
-          success: true,
-          lease_seconds: leaseSeconds,
-          jobs: [],
-        };
-      }
+      if (jobIds.length === 0) return [];
 
       const leaseExpiresAt = new Date(now.getTime() + leaseSeconds * 1000);
 
       await tx.printJob.updateMany({
-        where: {
-          id: {
-            in: jobIds,
-          },
-        },
+        where: { id: { in: jobIds } },
         data: {
           status: 'leased',
-          leasedByAgentId: agent.id,
+          leasedByAgentId: this.agentId,
           leaseExpiresAt,
         },
       });
 
-      const jobs = await tx.printJob.findMany({
-        where: {
-          id: {
-            in: jobIds,
-          },
-        },
+      return await tx.printJob.findMany({
+        where: { id: { in: jobIds } },
       });
-
-      const jobsById = new Map(jobs.map((job) => [Number(job.id), job]));
-      const orderedJobs = jobIds
-        .map((id) => jobsById.get(id))
-        .filter((job): job is (typeof jobs)[number] => Boolean(job));
-
-      return {
-        success: true,
-        lease_seconds: leaseSeconds,
-        jobs: orderedJobs.map((job) => ({
-          job_id: job.id.toString(),
-          mode: job.mode,
-          target_printer_uid: job.targetPrinterUid,
-          payload: job.payloadJson,
-          idempotency_key: job.idempotencyKey,
-        })),
-      };
     });
+
+    return {
+      success: true,
+      lease_seconds: leaseSeconds,
+      jobs: orderedJobs.map((job) => ({
+        job_id: job.id.toString(),
+        mode: job.mode as 'temporary' | 'queue',
+        target_printer_uid: job.targetPrinterUid,
+        payload: job.payloadJson,
+        idempotency_key: job.idempotencyKey,
+      })),
+    };
   }
 }
+
