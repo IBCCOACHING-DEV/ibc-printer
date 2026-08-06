@@ -10,7 +10,6 @@ import { hostname } from 'os';
 import { PrintService } from '../print/print.service';
 import prisma from '../lib/prisma';
 
-
 export interface ProcessHeartbeatPayload {
   event_id: string;
   agent_key: string;
@@ -36,7 +35,6 @@ interface HubJob {
   payload: any;
   idempotency_key: string;
 }
-
 
 @Injectable()
 export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
@@ -194,19 +192,6 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
   private async safeRegister() {
     try {
-      // await this.post('/agents/register', {
-      //   event_id: this.eventId,
-      //   agent_key: this.agentKey,
-      //   name: this.agentName,
-      //   version: process.env.npm_package_version || 'local',
-      //   metadata: {
-      //     os: process.platform,
-      //     arch: process.arch,
-      //     hostname: hostname(),
-      //     node: process.version,
-      //   },
-      // });
-
       const agent = await prisma.printerAgent.upsert({
         where: { agentKey: this.agentKey },
         update: {
@@ -270,7 +255,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const printers = await this.getPrintersCached();
-      
+
       const reportedPrinters = printers.map((printer) => ({
         printerUid: this.buildPrinterUid(printer.name),
         name: printer.name,
@@ -286,14 +271,18 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         metadata: this.buildAgentMetadata(),
         printers: reportedPrinters,
       };
-      
+
       const heartbeatStartTime = process.hrtime.bigint();
       const response = await this.processHeartbeat(payload);
       const heartbeatEndTime = process.hrtime.bigint();
-      this.logger.log(`Heartbeat processado localmente em ${Number(heartbeatEndTime - heartbeatStartTime) / 1_000_000}ms`);
+      this.logger.log(
+        `Heartbeat processado localmente em ${Number(heartbeatEndTime - heartbeatStartTime) / 1_000_000}ms`,
+      );
       return response;
     } catch (error) {
-      this.logger.error(`Falha no processamento de heartbeat local: ${this.errorMessage(error)}`);
+      this.logger.error(
+        `Falha no processamento de heartbeat local: ${this.errorMessage(error)}`,
+      );
     } finally {
       this.isHubWorkRunning = false;
     }
@@ -312,48 +301,53 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     if (!agent) throw new NotFoundException('Agente nao encontrado');
 
     const transactionStartTime = process.hrtime.bigint();
-    await prisma.$transaction(async (tx) => {
-      await tx.printerAgent.update({
-        where: { id: agent.id },
-        data: {
-          status: 'online',
-          version: payload.version,
-          metadataJson: payload.metadata,
-          lastSeenAt: now,
-        },
-      });
-
-      // Otimização: Executar upserts de impressoras em paralelo
-      const printerOperations = reportedPrinters.map((printer) => {
-        return tx.printer.upsert({
-          where: { printerUid: printer.printerUid },
-          update: {
-            eventId,
-            printerAgentId: agent.id,
-            name: printer.name,
-            isDefault: printer.isDefault,
-            isOnline: printer.isOnline,
-            capabilitiesJson: printer.capabilitiesJson,
-            statusReason: null,
-            lastSeenAt: now, // Atualiza para o tempo exato
-          },
-          create: {
-            eventId,
-            printerAgentId: agent.id,
-            printerUid: printer.printerUid,
-            name: printer.name,
-            isDefault: printer.isDefault,
-            isOnline: printer.isOnline,
-            capabilitiesJson: printer.capabilitiesJson,
-            statusReason: null,
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.printerAgent.update({
+          where: { id: agent.id },
+          data: {
+            status: 'online',
+            version: payload.version,
+            metadataJson: payload.metadata,
             lastSeenAt: now,
           },
         });
-      });
-      await Promise.all(printerOperations);
-    }, { maxWait: 10000, timeout: 20000 });
+
+        // Otimização: Executar upserts de impressoras em paralelo
+        const printerOperations = reportedPrinters.map((printer) => {
+          return tx.printer.upsert({
+            where: { printerUid: printer.printerUid },
+            update: {
+              eventId,
+              printerAgentId: agent.id,
+              name: printer.name,
+              isDefault: printer.isDefault,
+              isOnline: printer.isOnline,
+              capabilitiesJson: printer.capabilitiesJson,
+              statusReason: null,
+              lastSeenAt: now, // Atualiza para o tempo exato
+            },
+            create: {
+              eventId,
+              printerAgentId: agent.id,
+              printerUid: printer.printerUid,
+              name: printer.name,
+              isDefault: printer.isDefault,
+              isOnline: printer.isOnline,
+              capabilitiesJson: printer.capabilitiesJson,
+              statusReason: null,
+              lastSeenAt: now,
+            },
+          });
+        });
+        await Promise.all(printerOperations);
+      },
+      { maxWait: 10000, timeout: 20000 },
+    );
     const transactionEndTime = process.hrtime.bigint();
-    this.logger.debug(`Heartbeat transaction completed in ${Number(transactionEndTime - transactionStartTime) / 1_000_000}ms`);
+    this.logger.debug(
+      `Heartbeat transaction completed in ${Number(transactionEndTime - transactionStartTime) / 1_000_000}ms`,
+    );
 
     const reportedPrinterUids = reportedPrinters.map((p) => p.printerUid);
     const updateManyStartTime = process.hrtime.bigint();
@@ -363,21 +357,25 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         printerAgentId: agent.id,
         printerUid: { notIn: reportedPrinterUids },
       },
-      data: { 
-        isOnline: false, 
-        statusReason: 'not_reported_in_heartbeat' 
+      data: {
+        isOnline: false,
+        statusReason: 'not_reported_in_heartbeat',
       },
     });
     const updateManyEndTime = process.hrtime.bigint();
-    this.logger.debug(`Printer updateMany completed in ${Number(updateManyEndTime - updateManyStartTime) / 1_000_000}ms`);
+    this.logger.debug(
+      `Printer updateMany completed in ${Number(updateManyEndTime - updateManyStartTime) / 1_000_000}ms`,
+    );
 
     const maintenanceStartTime = process.hrtime.bigint();
     await Promise.allSettled([
       this.runMaintenance(now),
-      this.markStaleEntitiesOffline(now)
+      this.markStaleEntitiesOffline(now),
     ]);
     const maintenanceEndTime = process.hrtime.bigint();
-    this.logger.debug(`Maintenance tasks completed in ${Number(maintenanceEndTime - maintenanceStartTime) / 1_000_000}ms`);
+    this.logger.debug(
+      `Maintenance tasks completed in ${Number(maintenanceEndTime - maintenanceStartTime) / 1_000_000}ms`,
+    );
 
     return {
       heartbeat_interval_seconds: this.heartbeatIntervalSeconds,
@@ -404,7 +402,9 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       where: {
         mode: 'temporary',
         status: { in: ['succeeded', 'failed', 'dead'] },
-        updatedAt: { lt: this.minutesBefore(now, this.hardInactiveAfterMinutes) },
+        updatedAt: {
+          lt: this.minutesBefore(now, this.hardInactiveAfterMinutes),
+        },
       },
     });
   }
@@ -472,7 +472,9 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         await this.processJob(job);
       }
     } catch (error) {
-      this.logger.error(`Falha no loop de reinvindicação/processamento local: ${this.errorMessage(error)}`);
+      this.logger.error(
+        `Falha no loop de reinvindicação/processamento local: ${this.errorMessage(error)}`,
+      );
     } finally {
       this.isClaiming = false;
     }
@@ -527,7 +529,9 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         throw new Error(`Unsupported job type: ${type}`);
       }
       const printServiceEndTime = process.hrtime.bigint();
-      this.logger.log(`Print service call for job ${job.job_id} completed in ${Number(printServiceEndTime - printServiceStartTime) / 1_000_000}ms`);
+      this.logger.log(
+        `Print service call for job ${job.job_id} completed in ${Number(printServiceEndTime - printServiceStartTime) / 1_000_000}ms`,
+      );
 
       if (success) {
         // Fire-and-forget: Acknowledge success in the background
@@ -555,7 +559,9 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
       );
     } finally {
       const jobProcessingEndTime = process.hrtime.bigint();
-      this.logger.log(`Job ${job.job_id} processing finished in ${Number(jobProcessingEndTime - jobProcessingStartTime) / 1_000_000}ms`);
+      this.logger.log(
+        `Job ${job.job_id} processing finished in ${Number(jobProcessingEndTime - jobProcessingStartTime) / 1_000_000}ms`,
+      );
     }
   }
 
@@ -765,7 +771,10 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
   private async getPrintersCached(): Promise<any[]> {
     const now = Date.now();
-    if (this.cachedPrinters && (now - this.lastPrintersFetchTime < this.PRINTER_CACHE_TTL_MS)) {
+    if (
+      this.cachedPrinters &&
+      now - this.lastPrintersFetchTime < this.PRINTER_CACHE_TTL_MS
+    ) {
       return this.cachedPrinters;
     }
 
@@ -795,7 +804,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     return body;
   }
 
- async claimJobs(payload: {
+  async claimJobs(payload: {
     event_id: string;
     agent_key: string;
     batch_size?: number;
@@ -814,7 +823,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
     const leaseSeconds = 45;
     const now = new Date();
     const offlineThreshold = new Date(now.getTime() - 90 * 1000);
-    
+
     if (supportedPrinters.length === 0) {
       return {
         success: true,
@@ -829,7 +838,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
 
     const orderedJobs = await prisma.$transaction(async (tx) => {
       const printerPlaceholders = supportedPrinters.map(() => '?').join(', ');
-      
+
       const rows = (await tx.$queryRawUnsafe(
         `SELECT pj.id
          FROM print_jobs pj
