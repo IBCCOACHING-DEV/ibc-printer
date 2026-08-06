@@ -351,7 +351,7 @@ export class PrinterHubService implements OnModuleInit, OnModuleDestroy {
         });
       });
       await Promise.all(printerOperations);
-    }, { maxWait: 5000, timeout: 10000 });
+    }, { maxWait: 10000, timeout: 20000 });
     const transactionEndTime = process.hrtime.bigint();
     this.logger.debug(`Heartbeat transaction completed in ${Number(transactionEndTime - transactionStartTime) / 1_000_000}ms`);
 
