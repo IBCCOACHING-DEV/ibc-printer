@@ -8,18 +8,36 @@ export default () => ({
     defaultPrinter: process.env.DEFAULT_PRINTER,
     timeout: parseInt(process.env.PRINT_TIMEOUT, 10) || 30000,
   },
-  printerHub: {
-    enabled: process.env.PRINTER_HUB_ENABLED === 'true',
-    baseUrl: process.env.PRINTER_HUB_BASE_URL || '',
-    apiToken: process.env.PRINTER_HUB_API_TOKEN || '',
-    eventId: process.env.PRINTER_HUB_EVENT_ID || 'default-event',
-    agentKey: process.env.PRINTER_AGENT_KEY || '',
-    agentName: process.env.PRINTER_AGENT_NAME || '',
-    uidPrefix: process.env.PRINTER_UID_PREFIX || '',
-    heartbeatIntervalMs:
-      parseInt(process.env.PRINTER_HEARTBEAT_INTERVAL_MS, 10) || 30000,
-    claimIntervalMs:
-      parseInt(process.env.PRINTER_CLAIM_INTERVAL_MS, 10) || 1500,
-    claimBatchSize: parseInt(process.env.PRINTER_CLAIM_BATCH_SIZE, 10) || 1,
+  // Banco local (SQLite/WAL) do Checkin Pocket — students, print_jobs,
+  // printer_agents, printers, print_job_attempts e outbox_events.
+  localDatabase: {
+    url: process.env.LOCAL_DATABASE_URL || 'file:./data/checkin-pocket.db',
+  },
+  // Mensageria com o Checkin Pai e com as demais estações via RabbitMQ.
+  rabbitmq: {
+    url: process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672',
+  },
+  // Identidade desta estação de credenciamento (usada como agentKey nas
+  // filas/eventos do RabbitMQ e no inventário local de impressoras).
+  checkinAgent: {
+    agentKey: process.env.CHECKIN_AGENT_KEY || 'local-agent',
+    agentName: process.env.CHECKIN_AGENT_NAME || 'Checkin Pocket',
+  },
+  // Banco MySQL PRINCIPAL do Checkin Pai ("checkin") — acesso SOMENTE
+  // LEITURA usado para sincronizar auth (users) e listar/baixar
+  // Courses/Students sob demanda. Nunca usado para migrate/escrita.
+  paiDatabase: {
+    host: process.env.PAI_DATABASE_HOST,
+    port: parseInt(process.env.PAI_DATABASE_PORT, 10) || 3306,
+    name: process.env.PAI_DATABASE_NAME,
+    user: process.env.PAI_DATABASE_USER,
+    password: process.env.PAI_DATABASE_PASSWORD,
+  },
+  // Sincronização de autenticação (cache local de Operator) a partir do
+  // banco do Pai — roda em loop de retry no boot e depois periodicamente.
+  authSync: {
+    retryIntervalMs: parseInt(process.env.AUTH_SYNC_RETRY_INTERVAL_MS, 10) || 15000,
+    refreshIntervalMs:
+      parseInt(process.env.AUTH_SYNC_REFRESH_INTERVAL_MS, 10) || 300000,
   },
 });
