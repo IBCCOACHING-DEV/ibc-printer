@@ -1,0 +1,174 @@
+// Checkin Pocket — banco LOCAL (SQLite, modo WAL habilitado em runtime via PRAGMA).
+// Este schema é independente do schema principal (prisma/schema.prisma), que
+// continua apontando para o MySQL compartilhado usado pelo fluxo legado do
+// Printer Hub (polling/lease via HTTP contra o Checkin Pai).
+//
+// Gere o client com:
+//   npx prisma generate --config prisma.local.config.ts
+//
+// Aplique as migrations com:
+//   npx prisma migrate deploy --config prisma.local.config.ts
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../generated/prisma-local"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("LOCAL_DATABASE_URL")
+}
+
+/// Réplica local do ingresso (Student) do Checkin Pai, usada para localizar
+/// o aluno pelo token do QR Code sem depender de rede durante o check-in.
+model Student {
+  id            Int       @id
+  courseId      Int       @map("course_id")
+  courseName    String    @map("course_name")
+  name          String
+  token         String    @unique
+  ibcCustomerId Int?      @map("ibc_customer_id")
+  checkedIn     Boolean   @default(false) @map("checked_in")
+  checkedInAt   DateTime? @map("checked_in_at")
+  syncedAt      DateTime  @default(now()) @map("synced_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  printJobs PrintJob[]
+
+  @@index([checkedIn])
+  @@map("students")
+}
+
+/// Representa este agente/estação de credenciamento local (a própria
+/// instância do Checkin Pocket). Diferente do fluxo antigo, não há mais
+/// leasing remoto de jobs: a impressão acontece diretamente nesta máquina.
+model PrinterAgent {
+  id           Int      @id @default(autoincrement())
+  agentKey     String   @unique @map("agent_key")
+  name         String
+  status       String   @default("online")
+  version      String?
+  metadataJson String?  @map("metadata_json")
+  lastSeenAt   DateTime @map("last_seen_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  printers         Printer[]
+  printJobAttempts PrintJobAttempt[]
+
+  @@map("printer_agents")
+}
+
+/// Impressoras físicas detectadas nesta estação.
+model Printer {
+  id             Int      @id @default(autoincrement())
+  printerAgentId Int?     @map("printer_agent_id")
+  printerUid     String   @unique @map("printer_uid")
+  name           String
+  isDefault      Boolean  @default(false) @map("is_default")
+  isOnline       Boolean  @default(true) @map("is_online")
+  lastSeenAt     DateTime @map("last_seen_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  printerAgent PrinterAgent? @relation(fields: [printerAgentId], references: [id])
+
+  @@map("printers")
+}
+
+/// Trabalho de impressão da etiqueta de credenciamento, criado
+/// imediatamente após o check-in e processado por um worker local.
+model PrintJob {
+  id               Int    @id @default(autoincrement())
+  studentId        Int?   @map("student_id")
+  courseId         Int?   @map("course_id")
+  targetPrinterUid String @map("target_printer_uid")
+  labelName        String @map("label_name")
+  labelCourseName  String @map("label_course_name")
+  mode             String @default("local")
+  priority         Int    @default(0)
+  status           String @default("pending") // pending | succeeded | dead
+  attemptCount     Int    @default(0) @map("attempt_count")
+  maxAttempts      Int    @default(3) @map("max_attempts")
+  idempotencyKey   String @unique @map("idempotency_key")
+  resultJson       String? @map("result_json")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  student  Student?          @relation(fields: [studentId], references: [id])
+  attempts PrintJobAttempt[]
+
+  @@index([status, priority, createdAt])
+  @@map("print_jobs")
+}
+
+/// Histórico de tentativas de impressão de um print_job (sucesso ou falha).
+model PrintJobAttempt {
+  id             Int       @id @default(autoincrement())
+  printJobId     Int       @map("print_job_id")
+  printerAgentId Int?      @map("printer_agent_id")
+  startedAt      DateTime  @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  success        Boolean   @default(false)
+  errorCode      String?   @map("error_code")
+  errorMessage   String?   @map("error_message")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  printJob     PrintJob      @relation(fields: [printJobId], references: [id])
+  printerAgent PrinterAgent? @relation(fields: [printerAgentId], references: [id])
+
+  @@map("print_job_attempts")
+}
+
+/// Cache local de operadores (usuários do Checkin Pai) usado para login
+/// offline/local nesta estação. Populado e mantido em dia pelo
+/// AuthSyncService, que sincroniza a partir do banco do Pai (MySQL) no
+/// boot (retry até conseguir) e depois periodicamente.
+///
+/// `passwordHash` é o hash bcrypt padrão (`encrypted_password`) gerado pelo
+/// Devise no Checkin Pai — o login local faz bcrypt.compare contra este
+/// valor, sem depender de rede após a primeira sincronização bem-sucedida.
+model Operator {
+  id                  Int      @id @default(autoincrement())
+  remoteUserId        Int      @unique @map("remote_user_id")
+  email               String   @unique
+  passwordHash        String   @map("password_hash")
+  name                String
+  /// Espelha o enum `status` do Checkin Pai: manager=0, admin=1, staff=2, user=3.
+  status              Int      @default(3)
+  /// Espelha o enum `course_type` do Checkin Pai: full=0, formation=1, event=2.
+  courseType          Int      @default(0) @map("course_type")
+  authenticationToken String?  @map("authentication_token")
+  /// Último momento em que este registro foi atualizado a partir do Pai.
+  syncedAt            DateTime @map("synced_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("operators")
+}
+
+/// Outbox Pattern: eventos de domínio (ex.: check-in realizado) gravados na
+/// MESMA transação local que a mudança de estado. Um worker tenta publicar
+/// no RabbitMQ e só apaga a linha após receber o ACK do broker.
+model OutboxEvent {
+  id            String @id @default(uuid())
+  aggregateType String @map("aggregate_type")
+  aggregateId   String @map("aggregate_id")
+  eventType     String @map("event_type")
+  routingKey    String @map("routing_key")
+  payload       String // JSON serializado (string) — evita depender de suporte a Json nativo do driver.
+  status        String @default("pending") // pending | failed
+  attempts      Int    @default(0)
+  lastError     String? @map("last_error")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}

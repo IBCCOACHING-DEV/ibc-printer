@@ -1,0 +1,104 @@
+// Checkin Pocket — conexão de LEITURA ao banco MySQL PRINCIPAL do Checkin
+// Pai (database "checkin", ver check-in/config/database.yml no repo do
+// Checkin Pai — distinta da conexão "ibc_printer" já usada pelo fluxo
+// legado do Printer Hub em prisma/schema.prisma).
+//
+// Este schema é SOMENTE LEITURA: o Pocket nunca faz `migrate` nem escreve
+// neste banco. Ele existe para que cada estação — mesmo em eventos
+// itinerantes, com internet instável e IP mutável — consiga:
+//   1) sincronizar autenticação (users) para permitir login local/offline;
+//   2) listar Courses ativos e baixar sob demanda apenas o Course (e seus
+//      Students) que o operador escolher, sem replicar o banco inteiro.
+//
+// Gere o client com:
+//   npx prisma generate --config prisma.remote.config.ts
+//
+// NÃO existe script de "migrate" para este schema — o banco pertence ao
+// Checkin Pai e sua estrutura é gerenciada pelas migrations do Rails.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../../generated/prisma-remote"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("PAI_DATABASE_URL")
+}
+
+/// Operador (usuário Devise) do Checkin Pai. Mapeado apenas para LEITURA —
+/// o AuthSyncService copia os campos abaixo para o cache local (Operator)
+/// e o Pocket nunca escreve nesta tabela.
+///
+/// `encryptedPassword` é o hash bcrypt padrão gerado pelo
+/// `database_authenticatable` do Devise, compatível com verificação via
+/// bcrypt em Node (ver AuthSyncService/AuthService).
+model User {
+  id                  Int      @id @default(autoincrement())
+  email               String
+  encryptedPassword   String   @map("encrypted_password")
+  name                String
+  status              Int      @default(0)
+  courseType          Int      @default(0) @map("course_type")
+  authenticationToken String?  @map("authentication_token")
+  createdAt           DateTime @map("created_at")
+  updatedAt           DateTime @map("updated_at")
+
+  @@map("users")
+}
+
+/// Turma/evento (Course) do Checkin Pai. `status = true` e `hidden = false`
+/// definem o que a rota `GET /pai/courses` considera "ativo".
+model Course {
+  id              Int      @id @default(autoincrement())
+  name            String?
+  status          Boolean  @default(true)
+  hidden          Boolean  @default(false)
+  eventDate       String?  @map("event_date")
+  eventHour       String?  @map("event_hour")
+  eventDateEnd    String?  @map("event_date_end")
+  eventType       String?  @map("event_type")
+  eventPlace      String?  @map("event_place")
+  onlineReference Int?     @map("online_reference")
+  referenceCourse Boolean? @map("reference_course")
+  blinketId       String?  @map("blinket_id")
+  createdAt       DateTime @map("created_at")
+  updatedAt       DateTime @map("updated_at")
+
+  students Student[]
+
+  @@map("courses")
+}
+
+/// Ingresso (Student) do Checkin Pai — origem dos dados baixados sob
+/// demanda para a réplica local (SQLite) quando o operador sincroniza uma
+/// turma específica na tela "Baixar turma" (`POST /pai/courses/:id/sync`).
+model Student {
+  id            Int       @id @default(autoincrement())
+  courseId      Int?      @map("course_id")
+  name          String?
+  document      String?
+  email         String?
+  ibcCustomerId Int?      @map("ibc_customer_id")
+  ibcId         Int?      @map("ibc_id")
+  ibcCourseId   Int?      @map("ibc_course_id")
+  status        Boolean?
+  nickName      String?   @map("nick_name")
+  checkinDate   DateTime? @map("checkin_date")
+  ticketType    String?   @map("ticket_type")
+  phone         String?
+  whatsapp      String?
+  token         String?
+  note          String?   @db.Text
+  ownerName     String?   @map("owner_name")
+  ownerDocument String?   @map("owner_document")
+  premium       Boolean?
+  tagPrinter    Boolean?  @map("tag_printer")
+  createdAt     DateTime  @map("created_at")
+  updatedAt     DateTime  @map("updated_at")
+
+  course Course? @relation(fields: [courseId], references: [id])
+
+  @@index([courseId])
+  @@map("students")
+}
