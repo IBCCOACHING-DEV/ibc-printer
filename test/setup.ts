@@ -11,8 +11,6 @@ beforeAll(() => {
 
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-secret';
-  process.env.REDIS_HOST = 'localhost';
-  process.env.REDIS_PORT = '6379';
   process.env.DEFAULT_PRINTER = 'test-printer';
 });
 
