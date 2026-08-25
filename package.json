@@ -26,6 +26,7 @@
     "test:verbose": "jest --verbose",
     "test:ci": "jest --ci --coverage --silent --runInBand",
     "token": "node scripts/generate-test-token.js",
+    "reset-checkin": "ts-node -r tsconfig-paths/register scripts/reset-checkin.ts",
     "prisma:local:generate": "prisma generate --config prisma.local.config.ts",
     "prisma:local:migrate": "prisma migrate deploy --config prisma.local.config.ts",
     "prisma:local:migrate:dev": "prisma migrate dev --config prisma.local.config.ts",
