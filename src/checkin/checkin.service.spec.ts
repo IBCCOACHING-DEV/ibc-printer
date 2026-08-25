@@ -4,6 +4,7 @@ import { CheckinService } from './checkin.service';
 import { LocalPrismaService } from '../database/local-prisma.service';
 import { StudentsService } from '../students/students.service';
 import { LocalPrintJobsService } from '../local-print/local-print-jobs.service';
+import { LocalPrintWorkerService } from '../local-print/local-print-worker.service';
 import { OutboxService } from '../outbox/outbox.service';
 
 describe('CheckinService', () => {
@@ -35,6 +36,10 @@ describe('CheckinService', () => {
     record: jest.fn(),
   };
 
+  const printWorker = {
+    triggerNow: jest.fn(),
+  };
+
   const prisma = {
     $transaction: jest.fn((callback: (tx: unknown) => Promise<unknown>) => callback({})),
   };
@@ -52,6 +57,7 @@ describe('CheckinService', () => {
         { provide: LocalPrismaService, useValue: prisma },
         { provide: StudentsService, useValue: studentsService },
         { provide: LocalPrintJobsService, useValue: printJobsService },
+        { provide: LocalPrintWorkerService, useValue: printWorker },
         { provide: OutboxService, useValue: outboxService },
         { provide: ConfigService, useValue: configService },
       ],
@@ -131,5 +137,7 @@ describe('CheckinService', () => {
         routingKey: 'checkin.performed',
       }),
     );
+
+    expect(printWorker.triggerNow).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,6 +7,6 @@ import { PrinterDirectoryService } from './printer-directory.service';
 @Module({
   imports: [PrintModule],
   providers: [LocalPrintJobsService, LocalPrintWorkerService, PrinterDirectoryService],
-  exports: [LocalPrintJobsService],
+  exports: [LocalPrintJobsService, LocalPrintWorkerService],
 })
 export class LocalPrintModule {}

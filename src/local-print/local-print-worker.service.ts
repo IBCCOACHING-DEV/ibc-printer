@@ -34,6 +34,17 @@ export class LocalPrintWorkerService {
     private readonly configService: ConfigService,
   ) {}
 
+  /**
+   * Dispara o processamento imediatamente, sem esperar o próximo tick do
+   * @Interval — chamado pelo CheckinService assim que um print_job é
+   * criado, pra não pagar a latência do polling (até WORKER_TICK_MS) no
+   * caminho crítico do credenciamento. Fire-and-forget: nunca bloqueia
+   * quem chama; erros já são tratados/logados dentro de handleTick.
+   */
+  triggerNow(): void {
+    void this.handleTick();
+  }
+
   @Interval(WORKER_TICK_MS)
   async handleTick(): Promise<void> {
     if (this.running) {

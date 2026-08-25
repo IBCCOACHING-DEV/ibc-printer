@@ -5,6 +5,7 @@ import { LocalPrismaService } from '../database/local-prisma.service';
 import { LocalTransactionClient } from '../database/local-prisma.types';
 import { StudentsService } from '../students/students.service';
 import { LocalPrintJobsService } from '../local-print/local-print-jobs.service';
+import { LocalPrintWorkerService } from '../local-print/local-print-worker.service';
 import { OutboxService } from '../outbox/outbox.service';
 import { CHECKIN_PERFORMED_ROUTING_KEY } from '../messaging/rabbitmq.constants';
 import { CheckinPerformedMessage } from '../messaging/types';
@@ -35,6 +36,7 @@ export class CheckinService {
     private readonly prisma: LocalPrismaService,
     private readonly studentsService: StudentsService,
     private readonly printJobsService: LocalPrintJobsService,
+    private readonly printWorker: LocalPrintWorkerService,
     private readonly outboxService: OutboxService,
     private readonly configService: ConfigService,
   ) {}
@@ -117,6 +119,11 @@ export class CheckinService {
 
       return printJob.id;
     });
+
+    // Acorda o worker de impressão local imediatamente em vez de esperar o
+    // próximo tick do polling (até 2s) — maior parte da latência entre
+    // clicar em "Credenciar" e a etiqueta sair da impressora.
+    this.printWorker.triggerNow();
 
     this.logger.log(
       `Check-in realizado — aluno=${student.id} (${student.name}) turma="${student.courseName}" print_job=${printJobId}.`,

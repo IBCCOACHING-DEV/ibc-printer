@@ -8,8 +8,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as temp from 'temp';
 import * as fs from 'fs-extra';
-import nodeHtmlToImage from 'node-html-to-image';
 import * as path from 'path';
+import { renderLabelPng } from '../label-image';
 
 const execAsync = promisify(exec);
 
@@ -90,56 +90,8 @@ export class LinuxPrinterService implements IPrinterService {
     const tempImagePath = path.join(process.cwd(), tempFileName);
 
     try {
-      await nodeHtmlToImage({
-        output: tempImagePath,
-        html: `
-        <html>
-          <head>
-            <style>
-              body { 
-                width: 3000px;     
-                background-color: white;
-                padding: 0px;
-                magin: 0px;
-                display: flex;
-                flex-direction: column;
-                align-items: flex-start;
-                justify-content: flex-start;
-              }
-              .container { 
-                text-align: left; 
-                margin-left: 0px; 
-              }
-              .name { 
-                font-size: 150px; 
-                color: black;
-                margin-bottom: 10px;
-                font-family: Arial, sans-serif;
-              }
-              .nickname { 
-                font-size: 200px; 
-                font-weight: bold; 
-                color: #333; 
-                font-family: Arial, sans-serif;
-              }
-              .course {
-                font-size: 150px;
-                color: black;
-                font-family: Arial, sans-serif;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-            <div class="nickname">${nickname}</div>
-              <div class="name">${name}</div>
-              ${course ? `<div class="course">${course}</div>` : ''}
-            </div>
-          </body>
-        </html>
-      `,
-        puppeteerArgs: { args: ['--no-sandbox, --disable-setuid-sandbox'] },
-      });
+      const pngBuffer = renderLabelPng({ name, nickname, course });
+      await fs.writeFile(tempImagePath, pngBuffer);
 
       const command = `lp -d "${printerName}" -n ${copies} -o orientation-requested=4 -o position=top-left "${tempImagePath}"`;
       const { stdout } = await execAsync(command);

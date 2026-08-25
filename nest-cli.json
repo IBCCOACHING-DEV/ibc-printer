@@ -9,6 +9,11 @@
         "include": "../generated/prisma-local/**/*",
         "outDir": "dist/generated",
         "watchAssets": true
+      },
+      {
+        "include": "../assets/fonts/**/*",
+        "outDir": "dist/assets",
+        "watchAssets": true
       }
     ]
   }
