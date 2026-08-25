@@ -1,8 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/auth.guard';
 import { UpsertStudentsDto } from './dto/upsert-students.dto';
-import { StudentsService, SyncedCourseSummary } from './students.service';
+import { SearchStudentsQueryDto } from './dto/search-students.dto';
+import { StudentsService, StudentSearchResult, SyncedCourseSummary } from './students.service';
 
 @ApiTags('students')
 @ApiBearerAuth()
@@ -22,6 +23,17 @@ export class StudentsController {
   @ApiResponse({ status: HttpStatus.OK, description: 'Turmas sincronizadas nesta estação.' })
   listSyncedCourses(): Promise<SyncedCourseSummary[]> {
     return this.studentsService.listSyncedCourses();
+  }
+
+  @Get('search')
+  @ApiOperation({
+    summary: 'Busca alunos já sincronizados por nome, e-mail ou documento',
+    description:
+      'Alternativa ao QR Code para quando o operador não tem o voucher em mãos. Consulta apenas a réplica local (SQLite) — funciona offline. Retorna a turma e o status de check-in de cada resultado.',
+  })
+  @ApiResponse({ status: HttpStatus.OK, description: 'Alunos encontrados na réplica local.' })
+  search(@Query() query: SearchStudentsQueryDto): Promise<StudentSearchResult[]> {
+    return this.studentsService.search(query.q);
   }
 
   @Post('sync')

@@ -76,6 +76,8 @@ export class PaiSyncService {
       replica.courseName = courseName;
       replica.name = student.name;
       replica.token = student.token;
+      replica.email = student.email ?? undefined;
+      replica.document = student.document ?? undefined;
       replica.ibcCustomerId = student.ibcCustomerId ?? undefined;
       replicas.push(replica);
     }

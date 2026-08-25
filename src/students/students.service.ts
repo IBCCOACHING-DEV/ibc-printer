@@ -21,6 +21,20 @@ export interface SyncedCourseSummary {
   lastSyncedAt: Date;
 }
 
+export interface StudentSearchResult {
+  id: number;
+  name: string;
+  email: string | null;
+  document: string | null;
+  courseId: number;
+  courseName: string;
+  checkedIn: boolean;
+  checkedInAt: Date | null;
+  token: string;
+}
+
+const SEARCH_RESULTS_LIMIT = 15;
+
 @Injectable()
 export class StudentsService {
   private readonly logger = new Logger(StudentsService.name);
@@ -33,6 +47,44 @@ export class StudentsService {
 
   findById(id: number): Promise<Student | null> {
     return this.prisma.student.findUnique({ where: { id } });
+  }
+
+  /**
+   * Busca alunos já sincronizados nesta estação por nome, e-mail ou
+   * documento — alternativa ao QR Code para quando o operador não tem o
+   * voucher em mãos. Retorna a turma e o status de check-in de cada
+   * resultado, já que o mesmo nome pode aparecer em mais de uma turma ou
+   * já ter sido credenciado por outra estação (sincronizado via RabbitMQ).
+   */
+  async search(query: string): Promise<StudentSearchResult[]> {
+    const term = query.trim();
+    if (term.length < 2) {
+      return [];
+    }
+
+    const students = await this.prisma.student.findMany({
+      where: {
+        OR: [
+          { name: { contains: term } },
+          { email: { contains: term } },
+          { document: { contains: term } },
+        ],
+      },
+      orderBy: { name: 'asc' },
+      take: SEARCH_RESULTS_LIMIT,
+    });
+
+    return students.map((student) => ({
+      id: student.id,
+      name: student.name,
+      email: student.email,
+      document: student.document,
+      courseId: student.courseId,
+      courseName: student.courseName,
+      checkedIn: student.checkedIn,
+      checkedInAt: student.checkedInAt,
+      token: student.token,
+    }));
   }
 
   /**
@@ -103,6 +155,8 @@ export class StudentsService {
           courseName: item.courseName,
           name: item.name,
           token: item.token,
+          email: item.email ?? null,
+          document: item.document ?? null,
           ibcCustomerId: item.ibcCustomerId ?? null,
         },
         update: {
@@ -110,6 +164,8 @@ export class StudentsService {
           courseName: item.courseName,
           name: item.name,
           token: item.token,
+          email: item.email ?? null,
+          document: item.document ?? null,
           ibcCustomerId: item.ibcCustomerId ?? null,
           syncedAt: new Date(),
         },

@@ -19,12 +19,16 @@ datasource db {
 }
 
 /// Réplica local do ingresso (Student) do Checkin Pai, usada para localizar
-/// o aluno pelo token do QR Code sem depender de rede durante o check-in.
+/// o aluno pelo token do QR Code sem depender de rede durante o check-in —
+/// e também por nome/e-mail/documento, para quando o operador não tem o
+/// voucher em mãos (ver StudentsService#search).
 model Student {
   id            Int       @id
   courseId      Int       @map("course_id")
   courseName    String    @map("course_name")
   name          String
+  email         String?
+  document      String?
   token         String    @unique
   ibcCustomerId Int?      @map("ibc_customer_id")
   checkedIn     Boolean   @default(false) @map("checked_in")
@@ -35,6 +39,9 @@ model Student {
   printJobs PrintJob[]
 
   @@index([checkedIn])
+  @@index([name])
+  @@index([email])
+  @@index([document])
   @@map("students")
 }
 

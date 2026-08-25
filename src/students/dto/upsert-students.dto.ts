@@ -34,6 +34,16 @@ export class StudentReplicaDto {
   @MinLength(1)
   token: string;
 
+  @ApiProperty({ required: false, description: 'E-mail do aluno — usado na busca por nome/e-mail/documento.' })
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @ApiProperty({ required: false, description: 'Documento (CPF/RG) do aluno — usado na busca.' })
+  @IsOptional()
+  @IsString()
+  document?: string;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsInt()
