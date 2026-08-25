@@ -16,7 +16,6 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = env("LOCAL_DATABASE_URL")
 }
 
 /// Réplica local do ingresso (Student) do Checkin Pai, usada para localizar

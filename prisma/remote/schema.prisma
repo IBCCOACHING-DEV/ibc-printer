@@ -23,7 +23,6 @@ generator client {
 
 datasource db {
   provider = "mysql"
-  url      = env("PAI_DATABASE_URL")
 }
 
 /// Operador (usuário Devise) do Checkin Pai. Mapeado apenas para LEITURA —
