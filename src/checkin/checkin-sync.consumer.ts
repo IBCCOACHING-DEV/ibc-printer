@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RabbitMqService } from '../messaging/rabbitmq.service';
 import {
@@ -11,6 +11,8 @@ import {
 } from '../messaging/rabbitmq.constants';
 import { parseCheckinPerformedMessage } from '../messaging/types';
 import { StudentsService } from '../students/students.service';
+
+const REGISTER_RETRY_INTERVAL_MS = 15000;
 
 /**
  * Consumer (listener) do RabbitMQ que escuta a fila de check-ins de OUTROS
@@ -25,10 +27,19 @@ import { StudentsService } from '../students/students.service';
  *
  * Eventos originados nesta própria estação (mesmo agentKey) são ignorados,
  * pois o check-in local já aplicou a mudança de estado diretamente.
+ *
+ * Assim como o AuthSyncService (banco do Pai), o setup deste consumer NUNCA
+ * pode travar/derrubar o boot do Nest por causa de um broker indisponível
+ * (RabbitMQ pode não estar de pé ainda, ou nem existir em um teste local) —
+ * por isso `onModuleInit` dispara um loop de retry em background em vez de
+ * aguardar `assertAndBindQueue`/`consume` diretamente.
  */
 @Injectable()
-export class CheckinSyncConsumer implements OnModuleInit {
+export class CheckinSyncConsumer implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CheckinSyncConsumer.name);
+  private stopped = false;
+  private registered = false;
+  private pendingTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly rabbitMq: RabbitMqService,
@@ -40,31 +51,73 @@ export class CheckinSyncConsumer implements OnModuleInit {
     return this.configService.get<string>('checkinAgent.agentKey', 'unknown-agent');
   }
 
-  async onModuleInit(): Promise<void> {
+  onModuleInit(): void {
+    // Fire-and-forget deliberado: NÃO aguardamos esta Promise para não
+    // bloquear o bootstrap do Nest enquanto o RabbitMQ estiver indisponível.
+    void this.registerLoop();
+  }
+
+  onModuleDestroy(): void {
+    this.stopped = true;
+    if (this.pendingTimeout) {
+      clearTimeout(this.pendingTimeout);
+      this.pendingTimeout = null;
+    }
+  }
+
+  private async registerLoop(): Promise<void> {
+    while (!this.stopped && !this.registered) {
+      const success = await this.tryRegister();
+
+      if (success || this.stopped) {
+        return;
+      }
+
+      await this.sleep(REGISTER_RETRY_INTERVAL_MS);
+    }
+  }
+
+  private async tryRegister(): Promise<boolean> {
     const queue = checkinSyncQueueName(this.agentKey);
     const deadLetterQueue = checkinSyncDeadLetterQueueName(this.agentKey);
 
-    await this.rabbitMq.assertAndBindQueue(
-      deadLetterQueue,
-      CHECKIN_EVENTS_EXCHANGE_DLX,
-      CHECKIN_PERFORMED_DEAD_ROUTING_KEY,
-    );
+    try {
+      await this.rabbitMq.assertAndBindQueue(
+        deadLetterQueue,
+        CHECKIN_EVENTS_EXCHANGE_DLX,
+        CHECKIN_PERFORMED_DEAD_ROUTING_KEY,
+      );
 
-    await this.rabbitMq.assertAndBindQueue(
-      queue,
-      CHECKIN_EVENTS_EXCHANGE,
-      CHECKIN_PERFORMED_BINDING_PATTERN,
-      {
-        arguments: {
-          'x-dead-letter-exchange': CHECKIN_EVENTS_EXCHANGE_DLX,
-          'x-dead-letter-routing-key': CHECKIN_PERFORMED_DEAD_ROUTING_KEY,
+      await this.rabbitMq.assertAndBindQueue(
+        queue,
+        CHECKIN_EVENTS_EXCHANGE,
+        CHECKIN_PERFORMED_BINDING_PATTERN,
+        {
+          arguments: {
+            'x-dead-letter-exchange': CHECKIN_EVENTS_EXCHANGE_DLX,
+            'x-dead-letter-routing-key': CHECKIN_PERFORMED_DEAD_ROUTING_KEY,
+          },
         },
-      },
-    );
+      );
 
-    await this.rabbitMq.consume(queue, (content) => this.handleMessage(content));
+      await this.rabbitMq.consume(queue, (content) => this.handleMessage(content));
 
-    this.logger.log(`Sincronização de check-ins remotos ativa (fila "${queue}").`);
+      this.registered = true;
+      this.logger.log(`Sincronização de check-ins remotos ativa (fila "${queue}").`);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Não foi possível registrar o consumer de check-ins remotos (broker indisponível?): ${message}. Nova tentativa em ${REGISTER_RETRY_INTERVAL_MS}ms.`,
+      );
+      return false;
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.pendingTimeout = setTimeout(resolve, ms);
+    });
   }
 
   private async handleMessage(content: Buffer): Promise<void> {
