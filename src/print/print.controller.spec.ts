@@ -1,23 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrintController } from './print.controller';
 import { PrintService } from './print.service';
-import { QueueService } from '../queue/queue.service';
 import { PrintPdfDto } from './dto/print-pdf.dto';
 import { PrintTextDto } from './dto/print-text.dto';
 import { JwtAuthGuard } from '../auth/guards/auth.guard';
-
-const mockQueueService = {
-  addPdfJob: jest.fn(),
-  addTextJob: jest.fn(),
-  getQueueStatus: jest.fn(),
-  getJobStatus: jest.fn(),
-  cleanQueue: jest.fn(),
-};
 
 const mockPrintService = {
   getPrinters: jest.fn(),
   validatePrinter: jest.fn(),
   getPrinterInfo: jest.fn(),
+  printPDF: jest.fn(),
+  printText: jest.fn(),
 };
 
 describe('PrintController', () => {
@@ -27,10 +20,6 @@ describe('PrintController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PrintController],
       providers: [
-        {
-          provide: QueueService,
-          useValue: mockQueueService,
-        },
         {
           provide: PrintService,
           useValue: mockPrintService,
@@ -55,51 +44,41 @@ describe('PrintController', () => {
       printerName: 'test-printer',
     };
 
-    it('should add PDF job to queue', async () => {
-      mockQueueService.addPdfJob.mockResolvedValue({
+    it('should print the PDF immediately and return the result', async () => {
+      mockPrintService.printPDF.mockResolvedValue({
+        success: true,
         jobId: 'job-123',
-        requestId: 'req-456',
-      });
-      mockQueueService.getQueueStatus.mockResolvedValue({
-        waiting: 0,
-        active: 0,
-        completed: 0,
-        failed: 0,
-        delayed: 0,
+        printer: 'test-printer',
+        timestamp: new Date(),
       });
 
       const result = await controller.printPDF(printPdfDto);
 
       expect(result.success).toBe(true);
       expect(result.data.jobId).toBe('job-123');
-      expect(result.data.requestId).toBe('req-456');
-      expect(mockQueueService.addPdfJob).toHaveBeenCalledWith(printPdfDto);
+      expect(mockPrintService.printPDF).toHaveBeenCalledWith(printPdfDto);
     });
   });
 
   describe('printText', () => {
     const printTextDto: PrintTextDto = {
-      text: 'test text content',
+      name: 'Fulano de Tal',
+      nickname: 'Fulano',
     };
 
-    it('should add text job to queue', async () => {
-      mockQueueService.addTextJob.mockResolvedValue({
+    it('should print the label immediately and return the result', async () => {
+      mockPrintService.printText.mockResolvedValue({
+        success: true,
         jobId: 'job-789',
-        requestId: 'req-abc',
-      });
-      mockQueueService.getQueueStatus.mockResolvedValue({
-        waiting: 1,
-        active: 0,
-        completed: 0,
-        failed: 0,
-        delayed: 0,
+        printer: 'default',
+        timestamp: new Date(),
       });
 
       const result = await controller.printText(printTextDto);
 
       expect(result.success).toBe(true);
       expect(result.data.jobId).toBe('job-789');
-      expect(result.data.estimatedPosition).toBe(2);
+      expect(mockPrintService.printText).toHaveBeenCalledWith(printTextDto);
     });
   });
 
@@ -130,13 +109,6 @@ describe('PrintController', () => {
       mockPrintService.getPrinters.mockResolvedValue([
         { name: 'Printer1', isDefault: true, status: 'ready', isOnline: true },
       ]);
-      mockQueueService.getQueueStatus.mockResolvedValue({
-        waiting: 0,
-        active: 0,
-        completed: 10,
-        failed: 1,
-        delayed: 0,
-      });
 
       const result = await controller.healthCheck();
 
@@ -144,7 +116,6 @@ describe('PrintController', () => {
       expect(result.status).toBe('healthy');
       expect(result.data.printers.available).toBe(true);
       expect(result.data.printers.total).toBe(1);
-      expect(result.data.queue.completed).toBe(10);
     });
   });
 });

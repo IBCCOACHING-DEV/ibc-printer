@@ -1,23 +1,4 @@
-import { NestFactory } from '@nestjs/core';
-import 'dotenv/config';
-import { AppModule } from '../src/app.module';
-import { PrinterHubService } from '../src/printer-hub/printer-hub.service';
-
-async function main() {
-  const app = await NestFactory.createApplicationContext(AppModule);
-
-  try {
-    const service = app.get(PrinterHubService);
-
-    const result = await (service as any).ackSuccess();
-
-    console.log(result);
-  } finally {
-    await app.close;
-  }
-}
-
-main().catch((error) => {
-  console.log(error);
-  process.exit(1);
-});
+// Script de teste manual do antigo fluxo do Printer Hub (leasing remoto de
+// print jobs). Esse fluxo foi substituído por impressão local direta (ver
+// LocalPrintModule) e o módulo `printer-hub` foi removido — este arquivo
+// ficou órfão e não é mais executável. Pode ser apagado.
