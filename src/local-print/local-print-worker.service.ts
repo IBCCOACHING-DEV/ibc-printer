@@ -26,6 +26,14 @@ const RETRY_BACKOFF_BASE_MS = 3000;
 export class LocalPrintWorkerService {
   private readonly logger = new Logger(LocalPrintWorkerService.name);
   private running = false;
+  // Cada etiqueta leva ~2s pra imprimir (canvas+PDF+SumatraPDF) — bem perto
+  // do próprio WORKER_TICK_MS. Sem isso, um triggerNow() que chega enquanto
+  // um ciclo anterior ainda está processando era simplesmente descartado
+  // (ver `running`), e o job ficava esperando até WORKER_TICK_MS inteiro
+  // pelo próximo tick automático — dobrando a latência percebida entre o
+  // check-in e a etiqueta sair. Com essa flag, o ciclo em andamento roda de
+  // novo assim que termina, em vez de esperar o próximo @Interval.
+  private rerunRequested = false;
 
   constructor(
     private readonly printJobsService: LocalPrintJobsService,
@@ -39,24 +47,34 @@ export class LocalPrintWorkerService {
    * @Interval — chamado pelo CheckinService assim que um print_job é
    * criado, pra não pagar a latência do polling (até WORKER_TICK_MS) no
    * caminho crítico do credenciamento. Fire-and-forget: nunca bloqueia
-   * quem chama; erros já são tratados/logados dentro de handleTick.
+   * quem chama; erros já são tratados/logados dentro de runCycle.
    */
   triggerNow(): void {
-    void this.handleTick();
+    void this.runCycle();
   }
 
   @Interval(WORKER_TICK_MS)
   async handleTick(): Promise<void> {
+    await this.runCycle();
+  }
+
+  private async runCycle(): Promise<void> {
     if (this.running) {
+      this.rerunRequested = true;
       return;
     }
     this.running = true;
 
     try {
-      await this.processPendingJobs();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Falha no ciclo do worker de impressão local: ${message}`);
+      do {
+        this.rerunRequested = false;
+        try {
+          await this.processPendingJobs();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error(`Falha no ciclo do worker de impressão local: ${message}`);
+        }
+      } while (this.rerunRequested);
     } finally {
       this.running = false;
     }
@@ -84,6 +102,7 @@ export class LocalPrintWorkerService {
   }
 
   private async processJob(job: PrintJob): Promise<void> {
+    this.logger.debug(`print_job=${job.id} — iniciando processamento. TS_PROCESS_START=${Date.now()}`);
     const startedAt = new Date();
 
     const result = await this.printService.printText({

@@ -126,7 +126,7 @@ export class CheckinService {
     this.printWorker.triggerNow();
 
     this.logger.log(
-      `Check-in realizado — aluno=${student.id} (${student.name}) turma="${student.courseName}" print_job=${printJobId}.`,
+      `Check-in realizado — aluno=${student.id} (${student.name}) turma="${student.courseName}" print_job=${printJobId}. TS_TRIGGER=${Date.now()}`,
     );
 
     return {
