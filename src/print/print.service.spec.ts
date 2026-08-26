@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrintService } from './print.service';
 import { PrintPdfDto } from './dto/print-pdf.dto';
 import { PrintTextDto } from './dto/print-text.dto';
@@ -33,7 +34,10 @@ describe('PrintService', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PrintService],
+      providers: [
+        PrintService,
+        { provide: ConfigService, useValue: { get: jest.fn(() => false) } },
+      ],
     }).compile();
 
     service = module.get<PrintService>(PrintService);

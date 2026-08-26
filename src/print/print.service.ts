@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   IPrinterService,
   PrinterInfo,
@@ -14,7 +15,7 @@ export class PrintService {
   private readonly logger = new Logger(PrintService.name);
   private readonly printerService: IPrinterService;
 
-  constructor() {
+  constructor(private readonly configService: ConfigService) {
     this.printerService =
       process.platform === 'win32'
         ? new WindowsPrinterService()
@@ -67,6 +68,19 @@ export class PrintService {
   }
 
   async printText(printDto: PrintTextDto): Promise<PrintResult> {
+    if (!printDto.printerName) {
+      // getDefaultPrinter() no Windows consulta o WMI via PowerShell — ~2s
+      // por chamada numa máquina fraca. Isso deveria ser raro: em condições
+      // normais, print_job.targetPrinterUid já vem preenchido a partir de
+      // DEFAULT_PRINTER (ver CheckinService#defaultPrinterUid). Se isso
+      // aparecer nos logs de um evento, é sinal de que DEFAULT_PRINTER não
+      // foi configurado nesta estação — cada etiqueta está pagando ~2s à
+      // toa até isso ser corrigido.
+      this.logger.warn(
+        'printText chamado sem printerName — caindo no fallback lento (WMI/PowerShell). Verifique se DEFAULT_PRINTER está configurado no .env desta estação.',
+      );
+    }
+
     const printerName =
       printDto.printerName || (await this.printerService.getDefaultPrinter());
 
@@ -74,14 +88,27 @@ export class PrintService {
       `📝 Iniciando impressão texto - Plataforma: ${process.platform}, Impressora: ${printerName}`,
     );
 
+    const useRawRaster =
+      process.platform === 'win32' &&
+      this.configService.get<boolean>('print.useRawRaster', false) &&
+      typeof this.printerService.printTextRaw === 'function';
+
     try {
-      const result = await this.printerService.printText(
-        printDto.name,
-        printDto.nickname,
-        printerName,
-        printDto.copies,
-        printDto.course,
-      );
+      const result = useRawRaster
+        ? await this.printerService.printTextRaw(
+            printDto.name,
+            printDto.nickname,
+            printerName,
+            printDto.copies,
+            printDto.course,
+          )
+        : await this.printerService.printText(
+            printDto.name,
+            printDto.nickname,
+            printerName,
+            printDto.copies,
+            printDto.course,
+          );
 
       this.logger.log(`✅ Texto impresso com sucesso - Job: ${result.jobId}`);
       return result;

@@ -30,5 +30,19 @@ export interface IPrinterService {
     copies?: number,
     course?: string,
   ): Promise<PrintResult>;
+  /**
+   * Caminho experimental opt-in (Windows apenas — ver PRINT_USE_RAW_RASTER
+   * em configuration.ts) que bypassa GDI/driver enviando o protocolo
+   * raster nativo da impressora direto via datatype RAW. Opcional na
+   * interface porque só a WindowsPrinterService implementa; LinuxPrinterService
+   * não precisa (CUPS já lida bem com o caminho normal, ver CLAUDE.md §5).
+   */
+  printTextRaw?(
+    name: string,
+    nickname: string,
+    printerName: string,
+    copies?: number,
+    course?: string,
+  ): Promise<PrintResult>;
   getDefaultPrinter(): Promise<string>;
 }

@@ -7,6 +7,11 @@ export default () => ({
   print: {
     defaultPrinter: process.env.DEFAULT_PRINTER,
     timeout: parseInt(process.env.PRINT_TIMEOUT, 10) || 30000,
+    // Caminho experimental (Windows): gera o protocolo raster nativo da
+    // Brother QL-810W e envia direto pra fila do Windows como datatype RAW,
+    // pulando a renderização GDI/driver — ver windows-printer.service.ts
+    // #printTextRaw e CLAUDE.md §5. Default off; ativar por estação.
+    useRawRaster: process.env.PRINT_USE_RAW_RASTER === 'true',
   },
   // Banco local (SQLite/WAL) do Checkin Pocket — students, print_jobs,
   // printer_agents, printers, print_job_attempts e outbox_events.
