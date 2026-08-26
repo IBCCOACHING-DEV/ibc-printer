@@ -111,6 +111,12 @@ export class LocalPrintWorkerService {
       course: job.labelCourseName,
       printerName: job.targetPrinterUid,
       copies: 1,
+      // Se a 1ª tentativa (attemptCount=0) já usou o caminho raw
+      // (PRINT_USE_RAW_RASTER) e falhou, os retries seguintes forçam o
+      // caminho comprovado (Sumatra) em vez de insistir no raw — evita que
+      // um problema sistemático no raw derrube a etiqueta pra dead-letter
+      // sem nunca tentar o caminho que sempre funcionou.
+      forceSumatra: job.attemptCount > 0,
     });
 
     const finishedAt = new Date();

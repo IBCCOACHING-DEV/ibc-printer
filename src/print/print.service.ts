@@ -90,8 +90,15 @@ export class PrintService {
 
     const useRawRaster =
       process.platform === 'win32' &&
+      !printDto.forceSumatra &&
       this.configService.get<boolean>('print.useRawRaster', false) &&
       typeof this.printerService.printTextRaw === 'function';
+
+    if (printDto.forceSumatra) {
+      this.logger.warn(
+        '⚠️ Retry forçando o caminho Sumatra (a 1ª tentativa via raw falhou para este print_job) — ver tentativa anterior nos logs.',
+      );
+    }
 
     try {
       const result = useRawRaster
