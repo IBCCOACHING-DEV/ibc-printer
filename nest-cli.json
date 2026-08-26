@@ -14,6 +14,11 @@
         "include": "../assets/fonts/**/*",
         "outDir": "dist/assets",
         "watchAssets": true
+      },
+      {
+        "include": "../assets/bin/**/*",
+        "outDir": "dist/assets",
+        "watchAssets": true
       }
     ]
   }
